@@ -17,7 +17,12 @@ BUNDLE_ROOT="src-tauri/target/release/bundle/macos"
 APP_DIR="${BUNDLE_ROOT}/${PRODUCT_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 DMG_DIR="src-tauri/target/release/bundle/dmg"
-DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${VERSION}_aarch64.dmg"
+case "$(uname -m)" in
+  arm64) ARCH="aarch64" ;;
+  x86_64) ARCH="x86_64" ;;
+  *) ARCH="$(uname -m)" ;;
+esac
+DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${VERSION}_${ARCH}.dmg"
 
 rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/host" "$DMG_DIR"
@@ -75,6 +80,7 @@ rm -f "$DMG_PATH"
 hdiutil create -volname "$PRODUCT_NAME" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_PATH"
 
 echo
+echo "✅ Arch: ${ARCH}"
 echo "✅ App:  ${APP_DIR}"
 echo "✅ DMG:  ${DMG_PATH}"
 echo "   codesign -dv \"${APP_DIR}\""

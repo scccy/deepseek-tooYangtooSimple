@@ -76,11 +76,12 @@ scripts/         打包脚本（macOS dmg / Windows NSIS / debug .app）
 
 | 平台 | 命令 | 产物 |
 |---|---|---|
-| macOS | `scripts/package-macos.sh` | `.dmg` + release `.app` |
+| macOS | `scripts/package-macos.sh` | `.dmg` + release `.app`（aarch64 / x86_64 双架构） |
 | Windows | `scripts/package-windows.ps1`（Windows 机器 / CI） | NSIS 安装器 `.exe` |
 | Linux | `cargo build --release` + 手动打包 | 未接入 deb/AppImage（待补） |
 
-**发布流程：本机只出 macOS 产物。** Windows `.exe` 需要在 Windows 机器或 GitHub
+**发布流程：本机只出 macOS 产物（Apple Silicon 出 aarch64；Intel 需在 CI 的
+`macos-13` runner 上出 x86_64）。** Windows `.exe` 需要在 Windows 机器或 GitHub
 Actions（`.github/workflows/build-desktop.yml`）上执行，不能在 macOS 上交叉出
 NSIS 安装器。Linux 的 deb/AppImage 打包尚未接入，需在 Linux 环境补齐。
 

@@ -11,7 +11,15 @@ on:
 
 jobs:
   macos-dmg:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: aarch64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +34,7 @@ jobs:
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: DeepSeek-Harness-Desktop-macOS
+          name: DeepSeek-Harness-Desktop-macOS-${{ matrix.arch }}
           path: |
             dsh-desktop/src-tauri/target/release/bundle/dmg/*.dmg
             dsh-desktop/src-tauri/target/release/bundle/macos/DeepSeek Harness Desktop.app
