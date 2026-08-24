@@ -3,8 +3,11 @@ name: build-desktop
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'dsh-desktop/**'
+      - '.github/workflows/build-desktop.yml'
 
 jobs:
   macos-dmg:
