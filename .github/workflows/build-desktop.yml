@@ -65,7 +65,15 @@ jobs:
           if-no-files-found: error
 
   linux-build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -83,6 +91,6 @@ jobs:
       - name: Upload Linux binary
         uses: actions/upload-artifact@v4
         with:
-          name: DeepSeek-Harness-Desktop-Linux
+          name: DeepSeek-Harness-Desktop-Linux-${{ matrix.arch }}
           path: dsh-desktop/src-tauri/target/release/dsh-desktop
           if-no-files-found: error
