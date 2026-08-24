@@ -1,0 +1,53 @@
+name: build-desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  macos-dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Package macOS .app + .dmg
+        shell: zsh {0}
+        run: zsh scripts/package-macos.sh
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeek-Harness-Desktop-macOS
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/DeepSeek Harness Desktop.app
+
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Tauri CLI and build Windows bundles
+        shell: pwsh
+        run: |
+          npm install
+          npx tauri build --bundles nsis,portable
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeepSeek-Harness-Desktop-Windows
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

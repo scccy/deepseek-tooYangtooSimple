@@ -1,0 +1,4 @@
+# Adds the host/client channel-model companion to the web profile.
+- insert:
+    - id: channel-models-kfjvt
+      name: 'dsh-channel-models'

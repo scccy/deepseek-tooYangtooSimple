@@ -1,0 +1,27 @@
+{
+  "name": "dsh-token-meter-scccy",
+  "description": "DSH token 用量统计插件(个人定制版 -scccy):在设置面板新增「Token 用量」页,按天/月统计每次模型调用的真实 token 用量(含缓存命中拆分),支持按模型/时段分布图表与每日用量热点图;宿主侧通过 llm/stream 瀑布采集并持久化到 ~/.dsh/token-meter/。",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {}
+}

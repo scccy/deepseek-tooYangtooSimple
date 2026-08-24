@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.npmrc
+
+dev-harness/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+*.tgz
+
+# npm cache workaround artifacts
+.npm-cache/

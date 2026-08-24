@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    OAuth flows redirect back to a loopback HTTP listener in the Node host
+    (e.g. http://localhost:1455/auth/callback). Allow cleartext HTTP to the
+    local machine / local network inside WKWebView; loopback itself is
+    already ATS-exempt, this also covers alternative callback hosts from
+    PI_OAUTH_CALLBACK_HOST.
+  -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

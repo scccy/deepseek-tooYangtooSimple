@@ -1,0 +1,22 @@
+{
+  "name": "dsh-speckit-workflow-web",
+  "version": "0.8.0",
+  "private": true,
+  "description": "dsh-speckit-workflow 的独立 Web 前端原型（React + Ant Design）。1:1 复刻插件 v0.8 工作台 UI，数据层为 mock 宿主 RPC；调试完成后替换 src/api/index.js 即接回 dsh 插件。",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "antd": "^5.22.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.10"
+  }
+}

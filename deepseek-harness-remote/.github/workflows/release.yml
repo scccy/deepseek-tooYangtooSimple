@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI: true
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      - name: Validate version tag
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises'
+
+          const readJson = async (path) => JSON.parse(await readFile(path, 'utf8'))
+          const root = await readJson('package.json')
+          const plugin = await readJson('packages/plugin/package.json')
+          const versions = new Set([root.version, plugin.version])
+          const expectedTag = `v${plugin.version}`
+
+          if (versions.size !== 1) {
+            throw new Error(`Release versions do not match: ${[...versions].join(', ')}`)
+          }
+          if (process.env.GITHUB_REF_NAME !== expectedTag) {
+            throw new Error(`Expected tag ${expectedTag}, received ${process.env.GITHUB_REF_NAME}`)
+          }
+          NODE
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check types
+        run: |
+          pnpm --filter './packages/**' -r build
+          pnpm -r check
+
+      - name: Run tests
+        run: pnpm -r test
+
+      - name: Build workspace
+        run: NODE_ENV=production pnpm -r build
+
+      - name: Pack npm plugin
+        run: |
+          mkdir -p release-assets
+          pnpm --dir packages/plugin pack --pack-destination "$GITHUB_WORKSPACE/release-assets"
+
+      - name: Stage release assets
+        run: |
+          cd release-assets
+          sha256sum *.tgz > SHA256SUMS.txt
+
+      - name: Publish npm plugin
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_NAME="$(node -p "JSON.parse(require('fs').readFileSync('packages/plugin/package.json', 'utf8')).name")"
+          echo "Checking if version already exists on npm..."
+          if npm view "$PACKAGE_NAME"@"$VERSION" >/dev/null 2>&1; then
+            echo "Version already exists on npm, skip publish."
+          else
+            (cd packages/plugin && npm publish)
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DeepSeek 远程连接 ${{ github.ref_name }}
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  android-apk:
+    name: Build and attach Android APK
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm --filter './packages/**' -r build
+
+      - name: Generate Android project
+        run: pnpm --dir apps/android exec expo prebuild --platform android --no-install
+
+      - name: Build release APK
+        env:
+          NODE_ENV: production
+        run: |
+          chmod +x apps/android/android/gradlew
+          apps/android/android/gradlew \
+            -p apps/android/android \
+            :app:assembleRelease \
+            --no-daemon \
+            --build-cache \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+
+      - name: Stage APK
+        run: |
+          mkdir -p artifacts/android
+          cp apps/android/android/app/build/outputs/apk/release/app-release.apk \
+            "artifacts/android/dsh-remote-android-${{ github.ref_name }}.apk"
+
+      - name: Attach APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/android/dsh-remote-android-${{ github.ref_name }}.apk
+          fail_on_unmatched_files: true

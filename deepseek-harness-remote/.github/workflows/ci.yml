@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: true
+
+jobs:
+  quality:
+    name: Check, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm --filter './packages/**' -r build
+
+      - name: Check types
+        run: pnpm -r check
+
+      - name: Verify GitHub plugin bundle
+        run: |
+          node scripts/verify-dsh-plugin.mjs
+
+      - name: Run tests
+        run: pnpm -r test
+
+      - name: Build workspace
+        run: NODE_ENV=production pnpm -r build
+
+  plugin-package:
+    name: Package npm plugin
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm --filter './packages/**' -r build
+
+      - name: Pack npm plugin
+        run: |
+          mkdir -p artifacts/plugin
+          pnpm pack --pack-destination "$GITHUB_WORKSPACE/artifacts/plugin"
+          pnpm --dir packages/plugin pack --pack-destination "$GITHUB_WORKSPACE/artifacts/plugin"
+
+      - name: Upload npm plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-remote-plugin-${{ github.sha }}
+          path: artifacts/plugin/*.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  android-apk:
+    name: Package Android APK
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm --filter './packages/**' -r build
+
+      - name: Generate Android project
+        run: pnpm --dir apps/android exec expo prebuild --platform android --no-install
+
+      - name: Build release APK
+        env:
+          NODE_ENV: production
+        run: |
+          chmod +x apps/android/android/gradlew
+          apps/android/android/gradlew \
+            -p apps/android/android \
+            :app:assembleRelease \
+            --no-daemon \
+            --build-cache \
+            -PreactNativeArchitectures=armeabi-v7a,arm64-v8a
+
+      - name: Stage APK
+        run: |
+          mkdir -p artifacts/android
+          cp apps/android/android/app/build/outputs/apk/release/app-release.apk \
+            artifacts/android/dsh-remote-android.apk
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-remote-android-${{ github.sha }}
+          path: artifacts/android/dsh-remote-android.apk
+          if-no-files-found: error
+          retention-days: 14

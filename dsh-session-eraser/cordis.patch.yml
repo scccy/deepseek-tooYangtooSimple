@@ -1,0 +1,7 @@
+# dsh-session-eraser bundle patch: inserts the dual-face plugin row into the
+# web profile roster. The node half (exports ".") runs in the host process and
+# registers the /api/dsh-sesdel/delete route; the `dsh.client` declaration in
+# package.json makes the browser half load as /plugins/<id>/client.js.
+- insert:
+    - id: session-eraser
+      name: 'dsh-session-eraser'

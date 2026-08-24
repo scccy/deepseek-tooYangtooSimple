@@ -1,0 +1,7 @@
+# dsh-speckit-workflow bundle patch: inserts the workflow plugin row into
+# the DSH profile plugin roster. The package root export registers the
+# host-side tool and RPC channel; the `dsh.client` declaration in
+# package.json makes the browser half load as /plugins/<id>/client.js.
+- insert:
+    - id: dsh-speckit-workflow
+      name: 'dsh-speckit-workflow'

@@ -1,0 +1,78 @@
+{
+  "name": "dsh-speckit-workflow",
+  "version": "0.8.0",
+  "description": "DSH Feature 工作台 (v0.8): Speckit SDD 按 Feature 实例逐阶段创建线程，每个阶段停在人工确认点，Clarify/Converge 在同线程内多轮交互；由本地 SQLite 编排账本 + durable continuable 阶段线程驱动。视觉沿用已定版的 v0.7 看板风格。",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./db": "./lib/db.js",
+    "./orchestrator": "./lib/orchestrator.js",
+    "./stages": "./lib/stages.js",
+    "./threads": "./lib/threads.js",
+    "./worktree": "./lib/worktree.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/index.d.ts",
+    "lib/client.js",
+    "lib/client.d.ts",
+    "lib/db.js",
+    "lib/db.d.ts",
+    "lib/orchestrator.js",
+    "lib/stages.js",
+    "lib/threads.js",
+    "lib/worktree.js",
+    "cordis.patch.yml",
+    "skills/",
+    "README.md",
+    "DESIGN-V0.8.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "bash scripts/check.sh",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node --test lib/*.test.mjs",
+    "sync": "bash scripts/sync-to-profile.sh"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "spec-kit",
+    "speckit",
+    "sdd",
+    "spec-driven-development",
+    "workbench"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

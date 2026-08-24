@@ -1,0 +1,14 @@
+installed:
+- worktrees
+settings:
+  auto_execute_hooks: true
+hooks:
+  after_specify:
+  - extension: worktrees
+    command: speckit.worktrees.create
+    enabled: true
+    optional: false
+    priority: 10
+    prompt: Execute speckit.worktrees.create?
+    description: Auto-spawn a worktree after a new feature is specified
+    condition: null

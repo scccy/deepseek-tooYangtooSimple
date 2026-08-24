@@ -1,0 +1,7 @@
+- insert:
+    - id: dsh-remote
+      name: 'ds-harness-remote'
+      config:
+        enabled: true
+        role: host
+        serverUrl: https://dsh.r2049.cn

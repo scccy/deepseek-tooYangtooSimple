@@ -1,0 +1,22 @@
+.DS_Store
+.workbuddy/
+node_modules/
+*.log
+src-tauri/target/
+src-tauri/gen/
+.dsh/
+.worktrees/
+
+# --- build artifacts (consolidated monorepo) ---
+dist/
+build/
+target/
+out/
+bundle-dist/
+.next/
+.turbo/
+coverage/
+*.app
+*.dmg
+.env
+.env.*

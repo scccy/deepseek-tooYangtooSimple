@@ -1,0 +1,13 @@
+# dsh-token-meter-scccy bundle patch: inserts the dual-face plugin row into
+# the web profile roster. The node half (exports ".") runs in the host
+# process, captures real per-call token usage via the llm/stream waterfall,
+# persists monthly aggregates under ~/.dsh/token-meter/, and serves two HTTP
+# routes (/api/dsh-tokmeter/summary, /api/dsh-tokmeter/months). The
+# `dsh.client` declaration in package.json makes the browser half load as
+# /plugins/<id>/client.js and register the "Token 用量" settings section.
+# Name carries the -scccy suffix to stay distinguishable from the built-in
+# @deepseek-ai/dsh-token-meter (row id "token-meter"), which is kept because
+# its ctx.tokenMeter service is a hard dependency of dsh-compaction-basic.
+- insert:
+    - id: token-meter-scccy
+      name: 'dsh-token-meter-scccy'
