@@ -126,7 +126,7 @@ specify init --here --script py
 
 `.github/workflows/build-desktop.yml`：打 `v*` tag 自动触发（构建三平台并发布 Release）；手动 `workflow_dispatch` 可随时验证构建：
 
-- **macOS**：`macos-14`（aarch64，Apple Silicon）+ `macos-13`（x86_64，Intel）各打 `.app` + `.dmg`
+- **macOS**：`macos-14`（arm64）原生出 aarch64，并交叉编译 `x86_64-apple-darwin` 出 Intel 包，各打 `.app` + `.dmg`
 - **Windows**：`windows-latest`（x64）打 NSIS `.exe`
 - **Linux**：`ubuntu-latest`（x86_64）+ `ubuntu-24.04-arm`（aarch64）各编译单个 `dsh-desktop` 二进制
 

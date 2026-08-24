@@ -16,17 +16,23 @@ jobs:
         include:
           - runner: macos-14
             arch: aarch64
-          - runner: macos-13
+            target: ''
+          - runner: macos-14
             arch: x86_64
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Add cross-compile target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
       - name: Package macOS .app + .dmg
         shell: zsh {0}
-        run: zsh dsh-desktop/scripts/package-macos.sh
+        run: TARGET="${{ matrix.target }}" TARGET_ARCH="${{ matrix.arch }}" zsh dsh-desktop/scripts/package-macos.sh
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 

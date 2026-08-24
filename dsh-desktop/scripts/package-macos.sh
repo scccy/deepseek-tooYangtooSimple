@@ -3,12 +3,27 @@
 # requiring the Node/Tauri CLI. For a real distribution identity set
 # APPLE_SIGNING_IDENTITY before running (Developer ID Application: ...).
 #
+# Cross-compile an Intel build on an Apple-Silicon host with:
+#   TARGET=x86_64-apple-darwin TARGET_ARCH=x86_64 zsh scripts/package-macos.sh
+#
 # The app intentionally bundles NO Node runtime and NO dsh copy: it runs the
 # user's own Node (>= 20) and globally installed @deepseek-ai/dsh, so the CLI
 # and the desktop share one runtime, one package, one ~/.dsh.
 set -euo pipefail
 
 cd "$(cd "$(dirname "$0")/.." && pwd)"
+
+TARGET="${TARGET:-}"
+TARGET_ARCH="${TARGET_ARCH:-}"
+if [[ -n "$TARGET_ARCH" ]]; then
+  ARCH="$TARGET_ARCH"
+else
+  case "$(uname -m)" in
+    arm64) ARCH="aarch64" ;;
+    x86_64) ARCH="x86_64" ;;
+    *) ARCH="$(uname -m)" ;;
+  esac
+fi
 
 PRODUCT_NAME="DeepSeek Harness Desktop"
 VERSION="0.6.5"
@@ -17,22 +32,24 @@ BUNDLE_ROOT="src-tauri/target/release/bundle/macos"
 APP_DIR="${BUNDLE_ROOT}/${PRODUCT_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 DMG_DIR="src-tauri/target/release/bundle/dmg"
-case "$(uname -m)" in
-  arm64) ARCH="aarch64" ;;
-  x86_64) ARCH="x86_64" ;;
-  *) ARCH="$(uname -m)" ;;
-esac
 DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${VERSION}_${ARCH}.dmg"
 
 rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/host" "$DMG_DIR"
 
-(
-  cd src-tauri
-  cargo build --release
-)
-
-cp src-tauri/target/release/dsh-desktop "${CONTENTS}/MacOS/dsh-desktop"
+if [[ -n "$TARGET" ]]; then
+  (
+    cd src-tauri
+    cargo build --release --target "$TARGET"
+  )
+  cp "src-tauri/target/${TARGET}/release/dsh-desktop" "${CONTENTS}/MacOS/dsh-desktop"
+else
+  (
+    cd src-tauri
+    cargo build --release
+  )
+  cp src-tauri/target/release/dsh-desktop "${CONTENTS}/MacOS/dsh-desktop"
+fi
 chmod +x "${CONTENTS}/MacOS/dsh-desktop"
 
 # Shell + icon + the portless Node host resources. The sidecar resolver checks
