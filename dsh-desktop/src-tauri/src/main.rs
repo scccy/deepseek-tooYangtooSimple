@@ -744,6 +744,7 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
+            #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => focus_main_window(app_handle),
             RunEvent::MenuEvent(event) => match event.id().as_ref() {
                 "menu-quit" => request_quit(app_handle),
