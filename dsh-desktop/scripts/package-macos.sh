@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Build dsh-desktop-mac into a signed (ad-hoc by default) .app + .dmg without
+# Build dsh-desktop into a signed (ad-hoc by default) .app + .dmg without
 # requiring the Node/Tauri CLI. For a real distribution identity set
 # APPLE_SIGNING_IDENTITY before running (Developer ID Application: ...).
 #

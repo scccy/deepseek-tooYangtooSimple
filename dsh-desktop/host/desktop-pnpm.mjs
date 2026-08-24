@@ -11,7 +11,7 @@
  *
  * Contract: dsh-plugin-desktop/docs/plugin-services.md (DSH Desktop 2.x).
  *
- * @module dsh-desktop-mac/desktop-pnpm
+ * @module dsh-desktop/desktop-pnpm
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';

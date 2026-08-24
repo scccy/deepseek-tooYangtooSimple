@@ -237,7 +237,7 @@ fn apply_npm_env(cmd: &mut Command, prefix: Option<&Path>) {
 
 /// Derive the npm global prefix from the resolved dsh root, but only when the
 /// on-disk layout is the standard `<prefix>/lib/node_modules/@deepseek-ai/dsh`
-/// shape. Anything else (custom `DSH_MAC_DSH_ROOT`) falls back to npm's own
+/// shape. Anything else (custom `DSH_DESKTOP_DSH_ROOT`) falls back to npm's own
 /// configured global prefix.
 fn npm_global_prefix(dsh_root: &Path) -> Option<PathBuf> {
     let scoped = dsh_root.parent()?;

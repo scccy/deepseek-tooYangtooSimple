@@ -29,17 +29,43 @@ struct ShellProbe {
     npm_root: Option<PathBuf>,
 }
 
+/// 选一个可用的 POSIX shell（macOS 优先 zsh，Linux 优先 bash；尊重 SHELL）。
+#[cfg(unix)]
+fn preferred_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .filter(|s| Path::new(s).is_file())
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh".to_string()
+            } else {
+                "/bin/bash".to_string()
+            }
+        })
+}
+
 fn shell_probe() -> &'static ShellProbe {
     SHELL_PROBE.get_or_init(|| {
         let fallback = ShellProbe {
             node: None,
             npm_root: None,
         };
-        let Ok(output) = Command::new("/bin/zsh")
-            .arg("-lc")
-            .arg("command -v node; npm root -g 2>/dev/null")
-            .output()
-        else {
+        // nvm/fnm/volta 的 shim 只在 login shell 中可见；Windows 没有 login
+        // shell，改用 cmd 的 where/npm。
+        #[cfg(windows)]
+        let probe_output = Command::new("cmd")
+            .args(["/C", "where node & npm root -g"])
+            .output();
+        #[cfg(unix)]
+        let probe_output = {
+            let shell = preferred_shell();
+            Command::new(&shell)
+                .arg("-lc")
+                .arg("command -v node; npm root -g 2>/dev/null")
+                .output()
+        };
+        let Ok(output) = probe_output else {
             return fallback;
         };
         let Ok(text) = String::from_utf8(output.stdout) else {
@@ -49,12 +75,12 @@ fn shell_probe() -> &'static ShellProbe {
         let first = lines.next().map(PathBuf::from);
         let second = lines.next().map(PathBuf::from);
         // If node is missing, the first line is npm's answer — disambiguate
-        // by shape instead of position.
+        // by shape instead of position (Windows 二进制名是 node.exe)。
+        let is_node_path =
+            |p: &PathBuf| p.file_name().map(|n| n == "node" || n == "node.exe").unwrap_or(false);
         let (node, npm_root) = match (&first, &second) {
-            (Some(a), Some(b)) if a.file_name().map(|n| n == "node").unwrap_or(false) => {
-                (first, Some(b.clone()))
-            }
-            (Some(a), None) if a.file_name().map(|n| n == "node").unwrap_or(false) => (first, None),
+            (Some(a), Some(b)) if is_node_path(a) => (first, Some(b.clone())),
+            (Some(a), None) if is_node_path(a) => (first, None),
             (Some(_), None) => (None, first),
             _ => (None, None),
         };
@@ -68,17 +94,53 @@ pub fn resolve_node() -> PathBuf {
     NODE_PATH.get_or_init(resolve_node_uncached).clone()
 }
 
+/// 标准安装前缀中的 node 路径（按平台）。
+/// Windows 没有固定前缀，交给 cmd 的 `where node` 探测。
+fn node_prefix_candidates() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &["/opt/homebrew/bin/node", "/usr/local/bin/node", "/opt/local/bin/node"]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        &["/usr/bin/node", "/usr/local/bin/node", "/opt/node/bin/node"]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        &[]
+    }
+}
+
+/// 全局 npm 前缀下 @deepseek-ai/dsh 的标准位置（按平台）。
+/// Windows 没有固定全局前缀，交给 `npm root -g` 探测。
+fn dsh_root_candidates() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "/opt/homebrew/lib/node_modules/@deepseek-ai/dsh",
+            "/usr/local/lib/node_modules/@deepseek-ai/dsh",
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        &[
+            "/usr/lib/node_modules/@deepseek-ai/dsh",
+            "/usr/local/lib/node_modules/@deepseek-ai/dsh",
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        &[]
+    }
+}
+
 fn resolve_node_uncached() -> PathBuf {
-    if let Ok(value) = std::env::var("DSH_MAC_NODE") {
+    if let Some(value) = crate::envs::var("DSH_DESKTOP_NODE", "DSH_MAC_NODE") {
         if !value.trim().is_empty() {
             return PathBuf::from(value);
         }
     }
-    for candidate in [
-        "/opt/homebrew/bin/node",
-        "/usr/local/bin/node",
-        "/opt/local/bin/node",
-    ] {
+    for candidate in node_prefix_candidates() {
         let path = PathBuf::from(candidate);
         if path.is_file() {
             return path;
@@ -99,29 +161,47 @@ pub fn resolve_npm() -> PathBuf {
 }
 
 fn resolve_npm_uncached() -> PathBuf {
-    if let Ok(value) = std::env::var("DSH_MAC_NPM") {
+    if let Some(value) = crate::envs::var("DSH_DESKTOP_NPM", "DSH_MAC_NPM") {
         if !value.trim().is_empty() {
             return PathBuf::from(value);
         }
     }
     let node = resolve_node();
     if let Some(bin_dir) = node.parent() {
+        // Windows 上 npm 是 npm.cmd；Unix 是名为 npm 的 shell 脚本。
+        #[cfg(windows)]
+        let npm = bin_dir.join("npm.cmd");
+        #[cfg(not(windows))]
         let npm = bin_dir.join("npm");
         if npm.is_file() {
             return npm;
         }
     }
-    if let Ok(output) = Command::new("/bin/zsh")
-        .arg("-lc")
-        .arg("command -v npm")
-        .output()
-    {
-        let text = String::from_utf8_lossy(&output.stdout);
-        if let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) {
-            return PathBuf::from(line);
-        }
+    if let Some(line) = probe_npm_path() {
+        return line;
     }
-    PathBuf::from("npm")
+    #[cfg(windows)]
+    let bare = "npm.cmd";
+    #[cfg(not(windows))]
+    let bare = "npm";
+    PathBuf::from(bare)
+}
+
+/// 在 login shell 中探测 npm 路径（Windows 用 cmd 的 where）。
+fn probe_npm_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let output = Command::new("cmd").arg("/C").arg("where npm").output();
+    #[cfg(unix)]
+    let output = {
+        let shell = preferred_shell();
+        Command::new(&shell).arg("-lc").arg("command -v npm").output()
+    };
+    let output = output.ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)
 }
 
 /// A dsh package root must contain both package.json and lib/bin.js.
@@ -138,12 +218,12 @@ pub fn resolve_dsh_root() -> Option<PathBuf> {
 }
 
 fn resolve_dsh_root_uncached() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("DSH_MAC_DSH_ROOT") {
+    if let Some(value) = crate::envs::var("DSH_DESKTOP_DSH_ROOT", "DSH_MAC_DSH_ROOT") {
         if !value.trim().is_empty() {
             return Some(PathBuf::from(value));
         }
     }
-    if let Ok(value) = std::env::var("DSH_MAC_DSH_BIN") {
+    if let Some(value) = crate::envs::var("DSH_DESKTOP_DSH_BIN", "DSH_MAC_DSH_BIN") {
         if !value.trim().is_empty() {
             let bin = PathBuf::from(value);
             if let Some(root) = root_from_bin(&bin) {
@@ -169,10 +249,7 @@ fn resolve_dsh_root_uncached() -> Option<PathBuf> {
             return Some(probed);
         }
     }
-    for candidate in [
-        "/opt/homebrew/lib/node_modules/@deepseek-ai/dsh",
-        "/usr/local/lib/node_modules/@deepseek-ai/dsh",
-    ] {
+    for candidate in dsh_root_candidates() {
         let path = PathBuf::from(candidate);
         if valid_dsh_root(&path) {
             return Some(path);
@@ -257,7 +334,7 @@ pub fn resolve_home() -> PathBuf {
             return PathBuf::from(value);
         }
     }
-    if let Ok(value) = std::env::var("DSH_MAC_HOME") {
+    if let Some(value) = crate::envs::var("DSH_DESKTOP_HOME", "DSH_MAC_HOME") {
         if !value.trim().is_empty() {
             return PathBuf::from(value);
         }
@@ -280,8 +357,7 @@ pub fn spawn_sidecar(app: &tauri::AppHandle, www_dir: &Path) -> Result<SpawnedHo
     let script = resolve_host_script(app)
         .ok_or_else(|| "找不到 host/sidecar.mjs（未随包分发且仓库布局缺失）".to_string())?;
     let home = resolve_home();
-    let cwd = std::env::var("DSH_MAC_CWD")
-        .ok()
+    let cwd = crate::envs::var("DSH_DESKTOP_CWD", "DSH_MAC_CWD")
         .filter(|v| !v.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| home.clone());
@@ -289,21 +365,29 @@ pub fn spawn_sidecar(app: &tauri::AppHandle, www_dir: &Path) -> Result<SpawnedHo
     let version = app.package_info().version.to_string();
     let mut cmd = Command::new(&node);
     cmd.arg(&script)
-        .env("DSH_MAC_DSH_ROOT", &dsh_root)
-        .env("DSH_MAC_WWW_DIR", www_dir)
+        .env("DSH_DESKTOP_DSH_ROOT", &dsh_root)
+        .env("DSH_DESKTOP_WWW_DIR", www_dir)
         .env("DSH_HOME", &home)
-        .env("DSH_MAC_CWD", &cwd)
-        .env("DSH_MAC_APP_VERSION", &version)
+        .env("DSH_DESKTOP_CWD", &cwd)
+        .env("DSH_DESKTOP_APP_VERSION", &version)
         .env("DSH_TELEMETRY_DISABLED", "1")
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_PROCESS_GROUP：sidecar 与 agent 子进程归入独立组，
+        // 供 taskkill /T 整树回收。
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
     }
 
     let child = cmd
@@ -319,16 +403,21 @@ pub fn terminate_child(child: &mut Child) {
     if child.try_wait().ok().flatten().is_some() {
         return;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let pid = child.id() as i32;
-        unsafe {
-            libc::killpg(pid, libc::SIGTERM);
-        }
+    // 先温和终止：POSIX 向进程组发 SIGTERM；Windows 没有信号，直接对整棵
+    // 进程树 taskkill（sidecar 的 agent 会话是孙进程）。
+    #[cfg(unix)]
+    unsafe {
+        libc::killpg(child.id() as i32, libc::SIGTERM);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        let _ = child.kill();
+        let pid = child.id().to_string();
+        let _ = Command::new("taskkill")
+            .args(["/PID", pid.as_str(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 
     // The child window owns graceful disposal; do not block the UI too long,
@@ -339,11 +428,9 @@ pub fn terminate_child(child: &mut Child) {
         }
         thread::sleep(Duration::from_millis(150));
     }
-    #[cfg(target_os = "macos")]
-    {
-        unsafe {
-            libc::killpg(child.id() as i32, libc::SIGKILL);
-        }
+    #[cfg(unix)]
+    unsafe {
+        libc::killpg(child.id() as i32, libc::SIGKILL);
     }
     let _ = child.kill();
     let _ = child.wait();

@@ -145,7 +145,7 @@ fn pump_fetch_channel(
             _ => continue,
         };
         let ok = channel.send(frame);
-        if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
             eprintln!("[dsh-bridge] pump channel send -> {ok:?}");
         }
         if ok.is_err() {
@@ -197,7 +197,7 @@ pub async fn bridge_ws_open(
         .ok_or_else(|| "host did not answer ws-open".to_string())?;
     match event {
         BridgeEvent::WsResult { ok, reason, .. } => {
-            if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+            if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
                 eprintln!("[dsh-bridge] ws-open command resolved {ok} {reason}");
             }
             if ok {

@@ -175,7 +175,7 @@ fn text_response(status: StatusCode, body: &str) -> Response<Vec<u8>> {
 pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let uri = request.uri().clone();
     let path = uri.path().to_owned();
-    if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
         eprintln!(
             "[dsh-site] {} {}",
             request.method().as_str(),
@@ -224,7 +224,7 @@ pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     }
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     let url = format!("{path}{query}");
-    if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
         eprintln!("[dsh-site] route dispatch: {url}");
     }
     // The rust->node bridge sets Host: 127.0.0.1; strip browser markers as
@@ -238,10 +238,10 @@ pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     );
     match fetched {
         Ok((status, response_headers, body)) => {
-            // WKWebView has no download delegate for custom schemes: an
+            // custom schemes have no download delegate in the webviews: an
             // `attachment` response (e.g. dshmarket's log export) would
-            // silently vanish. Save it to ~/Downloads from the shell and
-            // reveal it in Finder instead.
+            // silently vanish. Save it to the Downloads dir from the shell
+            // and reveal it in the file manager instead.
             if (200..300).contains(&status) {
                 if let Some(filename) = attachment_filename(&response_headers) {
                     return save_attachment(&filename, &body);
@@ -318,12 +318,30 @@ fn save_attachment(filename: &str, body: &[u8]) -> Response<Vec<u8>> {
         );
     }
     eprintln!("[dsh-site] attachment saved: {}", target.display());
-    // Reveal in Finder so the user gets immediate, visible feedback.
-    let _ = std::process::Command::new("open")
-        .arg("-R")
-        .arg(&target)
-        .spawn();
+    reveal_in_file_manager(&target);
     text_response(StatusCode::OK, &format!("saved to {}\n", target.display()))
+}
+
+/// 在系统文件管理器中定位刚保存的文件（macOS: Finder；Windows: Explorer；
+/// Linux: 打开所在目录——xdg-open 无法高亮单个文件）。
+fn reveal_in_file_manager(path: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `Path::display()` 在 Windows 目标上自然使用反斜杠。
+        let _ = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(dir) = path.parent() {
+            let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+        }
+    }
 }
 
 pub fn protocol_handler(

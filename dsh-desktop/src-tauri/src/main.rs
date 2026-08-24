@@ -1,21 +1,22 @@
-// DeepSeek Harness desktop shell — macOS native edition (Tauri v2).
+// DeepSeek Harness desktop shell — cross-platform edition (Tauri v2).
 //
 // Architecture:
-//   WKWebView loads dsh://localhost/index.html (custom scheme, local site)
+//   The webview loads dsh://localhost/index.html (custom scheme, local site)
 //   └─ __tauri_bridge.js replaces /api fetch & WebSocket with Tauri IPC
 //     └─ Rust commands forward NDJSON to the Node host sidecar
 //       └─ sidecar boots the official `web` profile in-process with a
 //          zero-socket webServer stub — no port, no local HTTP server.
 //
-// Native macOS integration: application menu + standard shortcuts, menu-bar
-// tray with close-to-tray, Notification Center alerts from host event
-// streams, Dock reopen, single-instance activation, and persisted window
-// geometry.
+// Native integration: application menu + standard shortcuts, menu-bar tray
+// with close-to-tray, Notification Center / desktop alerts from host event
+// streams, Dock reopen (macOS) / single-instance activation, and persisted
+// window geometry.
 
 mod bridge;
 mod commands;
 mod host;
 mod site;
+mod envs;
 mod updater;
 
 use std::collections::HashMap;
@@ -83,7 +84,7 @@ const RESTART_OVERLAY_JS: &str = r##"
 })();
 "##;
 
-/// Synthetic pointer-event selftest (DSH_MAC_SELFTEST=1): drags the titlebar
+/// Synthetic pointer-event selftest (DSH_DESKTOP_SELFTEST=1): drags the titlebar
 /// twice and resizes the west edge once, then reports window geometry deltas
 /// through bridge_log. Guards against the "second drag silently fails"
 /// regression (tao native drag only works once per run on macOS).
@@ -264,7 +265,7 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
         .separator()
         .item(&tray_quit)
         .build()?;
-    let mut tray_builder = TrayIconBuilder::with_id("dsh-mac-tray")
+    let mut tray_builder = TrayIconBuilder::with_id("dsh-desktop-tray")
         .tooltip("DeepSeek Harness Desktop")
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
@@ -652,6 +653,8 @@ fn main() {
                     .hidden_title(true)
                     .background_color(tauri::utils::config::Color(16, 16, 22, 255));
             }
+            // Windows / Linux 保持系统装饰（交给 OS 窗口管理器）：dsh 前端
+            // 页面没有窗口控制按钮，无边框自绘标题栏会封死最小化/关闭入口。
             // Route window.open / target=_blank through the native popup
             // window factory instead of letting WKWebView drop the request.
             let popup_handle = app.handle().clone();
@@ -701,7 +704,7 @@ fn main() {
             startup_update_check(app.handle().clone());
             startup_stale_server_check(app.handle().clone());
 
-            if std::env::var("DSH_MAC_DEBUG_UI").as_deref() == Ok("1") {
+            if crate::envs::is_1("DSH_DESKTOP_DEBUG_UI", "DSH_MAC_DEBUG_UI") {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     for delay in [3u64, 8, 15] {
@@ -717,7 +720,7 @@ fn main() {
             }
             // Synthetic pointer-event selftest for titlebar drag / edge
             // resize: reports window position and width deltas via bridge_log.
-            if std::env::var("DSH_MAC_SELFTEST").as_deref() == Ok("1") {
+            if crate::envs::is_1("DSH_DESKTOP_SELFTEST", "DSH_MAC_SELFTEST") {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(12));

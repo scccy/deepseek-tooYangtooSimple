@@ -1,4 +1,4 @@
-// dsh-desktop-mac frontend transport shim.
+// dsh-desktop frontend transport shim.
 // Replaces fetch/WebSocket for dsh:// loopback traffic with Tauri IPC calls,
 // so the shipped DeepSeek Harness web client runs unchanged with zero TCP
 // ports. Run before any client module: the Rust shell injects this script
@@ -8,7 +8,7 @@
 
   var __TAURI__ = window.__TAURI__;
   if (!__TAURI__ || !__TAURI__.core || !__TAURI__.core.invoke) {
-    console.error('[dsh-mac] Tauri global API unavailable; transport shim not installed');
+    console.error('[dsh-desktop] Tauri global API unavailable; transport shim not installed');
     return;
   }
   var invoke = function invoke(cmd, args) {
@@ -1027,7 +1027,7 @@
   };
 
   window.__DSH_MAC__ = {
-    app: 'deepseek-harness-desktop-mac',
+    app: 'dsh-desktop',
     openExternal: function (url) {
       return invoke('shell_open_external', { url: String(url) });
     },
@@ -1037,8 +1037,13 @@
   };
 
   void invoke('bridge_probe', {}).catch(function (error) {
-    console.error('[dsh-mac] bridge probe failed:', error);
+    console.error('[dsh-desktop] bridge probe failed:', error);
   });
-  installTitlebarDrag();
-  installEdgeResize();
+  // macOS 专属：Overlay 标题栏的 26px 拖拽区 + 边沿 resize hack。
+  // Windows/Linux 使用系统装饰，交给 OS 窗口管理器，不劫持页面顶部。
+  var isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+  if (isMac) {
+    installTitlebarDrag();
+    installEdgeResize();
+  }
 })();

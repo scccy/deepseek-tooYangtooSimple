@@ -1,10 +1,10 @@
 /**
- * dsh-desktop-mac host sidecar (portless bridge).
+ * dsh-desktop host sidecar (portless bridge).
  *
  * Boots the shipped `web` profile IN-PROCESS with the webserver row disabled
  * and a route-registry stub (no TCP listener, no port). The frontend dist is
- * materialized beside the macOS app data directory; every HTTP/WebSocket
- * request from the WKWebView arrives from the Rust shell as NDJSON frames on
+ * materialized beside the app data directory; every HTTP/WebSocket
+ * request from the webview arrives from the Rust shell as NDJSON frames on
  * this process' stdin and is dispatched straight to the in-process routes,
  * mirroring deepseek-harness-desktop-windows' IPC transport.
  *
@@ -31,20 +31,23 @@ import {
   encodeClientFrame,
 } from './ws-ipc.mjs';
 
+// Cross-platform env read: DSH_DESKTOP_* wins, DSH_MAC_* kept for legacy.
+const dshenv = (name, legacy) => process.env[name] ?? process.env[legacy];
+
 // ---------------------------------------------------------------------------
 // package resolution: all dsh packages resolve from the installed dsh root.
 // ---------------------------------------------------------------------------
 const DSH_ROOT = (() => {
-  // The Rust shell always injects DSH_MAC_DSH_ROOT (it resolves the user's
+  // The Rust shell always injects DSH_DESKTOP_DSH_ROOT (it resolves the user's
   // global install and fails fast otherwise); the env/flag fallbacks exist
   // for running the sidecar standalone during development.
-  if (process.env.DSH_MAC_DSH_ROOT !== undefined && process.env.DSH_MAC_DSH_ROOT !== '') {
-    return process.env.DSH_MAC_DSH_ROOT;
+  if (dshenv('DSH_DESKTOP_DSH_ROOT', 'DSH_MAC_DSH_ROOT')) {
+    return dshenv('DSH_DESKTOP_DSH_ROOT', 'DSH_MAC_DSH_ROOT');
   }
-  const bin = process.env.DSH_MAC_DSH_BIN ?? '';
+  const bin = dshenv('DSH_DESKTOP_DSH_BIN', 'DSH_MAC_DSH_BIN') ?? '';
   const marker = join('/node_modules', '@deepseek-ai', 'dsh') + join('/lib', 'bin.js');
   if (bin.endsWith(marker)) return dirname(dirname(bin));
-  throw new Error('dsh package root not found (set DSH_MAC_DSH_ROOT).');
+  throw new Error('dsh package root not found (set DSH_DESKTOP_DSH_ROOT).');
 })();
 
 const pkgRequire = createRequire(pathToFileURL(join(DSH_ROOT, 'package.json')));
@@ -65,8 +68,8 @@ const { renderIndexInjections } = await importPackage('@deepseek-ai/dsh-host-web
 
 // Default to the CLI's `web` profile so the desktop app sees the same
 // sessions, installed plugins and settings as `dsh web`. Override with
-// DSH_MAC_PROFILE for an isolated desktop profile.
-const NAME = (process.env.DSH_MAC_PROFILE ?? 'web').trim() || 'web';
+// DSH_DESKTOP_PROFILE for an isolated desktop profile.
+const NAME = (dshenv('DSH_DESKTOP_PROFILE', 'DSH_MAC_PROFILE') ?? 'web').trim() || 'web';
 const TELEMETRY_ROW_ID = 'session-telemetry-otel';
 const PROFILE_ROOT_FILENAME = 'cordis.yml';
 const PROFILE_ROOT_CONFIG = [
@@ -76,18 +79,18 @@ const PROFILE_ROOT_CONFIG = [
   '[]',
   '',
 ].join('\n');
-const WWW_DIR = process.env.DSH_MAC_WWW_DIR ?? join(resolveDshHome(), 'desktop-www');
+const WWW_DIR = dshenv('DSH_DESKTOP_WWW_DIR', 'DSH_MAC_WWW_DIR') ?? join(resolveDshHome(), 'desktop-www');
 const HOME_PATCH_PATH = () => join(resolveDshHome(), PROFILE_PATCH_FILENAME);
 
 // The desktop rows in the web settings panel ship as a tiny client-only
 // bundle, materialized into the active profile's node_modules at boot so the
 // official client-modules graph picks it up like any other web plugin. The
-// app version travels from the Rust shell (DSH_MAC_APP_VERSION); the extra
+// app version travels from the Rust shell (DSH_DESKTOP_APP_VERSION); the extra
 // bundle revision forces a refresh when the generated client code changes
 // without an app version bump.
-const ABOUT_PACKAGE = '@dsh-desktop/macos-about';
-const ABOUT_VERSION = (process.env.DSH_MAC_APP_VERSION ?? '0.0.0').trim() || '0.0.0';
-const ABOUT_BUNDLE_REVISION = 4;
+const ABOUT_PACKAGE = '@dsh-desktop/desktop-about';
+const ABOUT_VERSION = (dshenv('DSH_DESKTOP_APP_VERSION', 'DSH_MAC_APP_VERSION') ?? '0.0.0').trim() || '0.0.0';
+const ABOUT_BUNDLE_REVISION = 5;
 const ABOUT_CLIENT_TEMPLATE = (versionJson) => `window.__ModuleLoader__.load({
   id: ${JSON.stringify(ABOUT_PACKAGE)},
   factory: (require) => {
@@ -326,17 +329,17 @@ const ABOUT_CLIENT_TEMPLATE = (versionJson) => `window.__ModuleLoader__.load({
     function apply(ctx) {
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
-        id: "macos-desktop-version",
+        id: "desktop-version",
         order: 900
       }, VersionRow));
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
-        id: "macos-desktop-dsh-update",
+        id: "desktop-dsh-update",
         order: 910
       }, DshUpdateRow));
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
-        id: "macos-desktop-hot-restart",
+        id: "desktop-hot-restart",
         order: 950
       }, HotRestartRow));
     }
@@ -403,7 +406,7 @@ const DESKTOP_PATCHES = [
     config: { printUrl: false, surfaceContext: false, trustedHosts: [], openBrowser: false },
   },
   { id: 'client-hmr', disabled: true },
-  { insert: [{ id: 'macos-desktop-version', name: ABOUT_PACKAGE }] },
+  { insert: [{ id: 'desktop-version', name: ABOUT_PACKAGE }] },
 ];
 
 const MUX_EVENTS_PATH = '/api/events.mux';
@@ -505,14 +508,11 @@ function prepareSite({ webServer, clientModules, wwwDir }) {
 // ---------------------------------------------------------------------------
 // in-process boot
 // ---------------------------------------------------------------------------
-function desktopSurfaceText() {
-  return 'You are interacting with the user through the DeepSeek Harness Desktop app for macOS (a native Tauri/WKWebView shell). The host composition runs in a private Node sidecar process owned by the app: the frontend loads from a dsh:// local site, every /api request and event downlink crosses the native shell IPC bridge, and no TCP port is exposed. The window can be hidden while sessions keep running, and native macOS notifications announce approvals, questions, errors, and finished replies. When the user refers to "this app", "this window", or "this GUI" without naming another target, they mean this desktop GUI. UI changes require rebuilding and restarting the desktop app; never promise hot reloads. Do not start replacement servers — the desktop carrier owns the transport.';
-}
-
 const webServer = createIpcWebServer(renderIndexInjections);
 
 async function bootHost() {
-  const cwd = process.env.DSH_MAC_CWD ?? process.env.HOME ?? '/';
+  const homeGuess = process.env.HOME ?? process.env.USERPROFILE ?? '/';
+  const cwd = dshenv('DSH_DESKTOP_CWD', 'DSH_MAC_CWD') ?? homeGuess;
   process.chdir(cwd);
   healProfilesModuleFallback(INSTALL_ANCHOR);
 
@@ -782,7 +782,7 @@ function handleFetch(msg) {
       frameBinChunk(msg.id, chunk);
     },
     onEnd() {
-      if (traceDescribe && process.env.DSH_MAC_TRACE_BRIDGE === '1') {
+      if (traceDescribe && dshenv('DSH_DESKTOP_TRACE_BRIDGE', 'DSH_MAC_TRACE_BRIDGE') === '1') {
         const text = Buffer.concat(res._chunks).toString('utf8');
         console.error(`[host-trace] description -> ${JSON.stringify(text).slice(0, 800)}`);
       }
@@ -800,7 +800,7 @@ function handleFetch(msg) {
     body,
   });
   pendingFetches.set(msg.id, { req, res, sentEnd: false });
-  if (process.env.DSH_MAC_TRACE_BRIDGE === '1') {
+  if (dshenv('DSH_DESKTOP_TRACE_BRIDGE', 'DSH_MAC_TRACE_BRIDGE') === '1') {
     console.error(`[host-trace] fetch ${msg.method} ${msg.url}`);
   }
   (async () => {
@@ -1014,18 +1014,18 @@ function installNotificationPumps() {
   void pump(apiProxy.events.mux, (payload) => {
     switch (payload.type) {
       case 'approval/requested':
-        frame({ type: 'notify', title: 'DSH · 需要审批', body: `工具 ${payload.toolName} 请求执行权限`, backgroundOnly: false });
+        frame({ type: 'notify', title: '需要审批', body: `工具 ${payload.toolName} 请求执行权限`, backgroundOnly: false });
         break;
       case 'question/requested': {
         const first = payload.questions?.[0];
         if (first !== undefined) {
-          frame({ type: 'notify', title: 'DSH · 问题等待回答', body: first.question, backgroundOnly: false });
+          frame({ type: 'notify', title: '等待回答', body: first.question, backgroundOnly: false });
         }
         break;
       }
       case 'session/event':
         if (payload.event?.type === 'turn/end' && !subagentSessions.has(payload.sessionId)) {
-          frame({ type: 'notify', title: 'DSH · 回复完成', body: `会话 ${short(payload.sessionId)} 的回复已就绪`, backgroundOnly: true });
+          frame({ type: 'notify', title: '完成对话', body: `会话 ${short(payload.sessionId)} 的回复已就绪`, backgroundOnly: true });
         }
         break;
       default:
@@ -1041,11 +1041,11 @@ function installNotificationPumps() {
         subagentSessions.delete(payload.sessionId);
         break;
       case 'host/agent-error':
-        frame({ type: 'notify', title: 'DSH · 会话错误', body: payload.message, backgroundOnly: false });
+        frame({ type: 'notify', title: '会话错误', body: payload.message, backgroundOnly: false });
         break;
       case 'host/remote-event':
         if (payload.event === 'cordis/request-run') {
-          frame({ type: 'notify', title: 'DSH · 插件等待批准', body: '动态 Cordis 插件请求运行，请在应用中批准或拒绝', backgroundOnly: false });
+          frame({ type: 'notify', title: '插件等待批准', body: '动态 Cordis 插件请求运行，请在应用中批准或拒绝', backgroundOnly: false });
         }
         break;
       default:
@@ -1114,10 +1114,6 @@ async function main() {
     if (clientModules === undefined) throw new Error('client-modules row not mounted');
     const site = prepareSite({ webServer, clientModules, wwwDir: WWW_DIR });
     notificationDispose = installNotificationPumps();
-    const systemPrompt = ctx.get('systemPrompt');
-    if (systemPrompt !== undefined) {
-      systemPrompt.section({ name: 'app:mac-desktop-surface', order: -98, text: () => desktopSurfaceText() });
-    }
     frame({
       type: 'ready',
       ok: true,

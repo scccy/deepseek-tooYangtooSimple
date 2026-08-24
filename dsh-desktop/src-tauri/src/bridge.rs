@@ -197,7 +197,7 @@ impl Bridge {
     /// Send an NDJSON request and register the pending receiver atomically.
     pub fn request(&self, msg: Value) -> Result<(u64, Receiver<BridgeEvent>), String> {
         let id = self.next_id();
-        if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
             let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
             eprintln!("[dsh-bridge] send {kind} as {id}");
         }
@@ -270,7 +270,7 @@ impl Bridge {
             "headers": headers,
             "body": body_b64,
         }))?;
-        if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
             eprintln!("[dsh-bridge] fetch_full: {url}");
         }
         let deadline = Instant::now() + timeout;
@@ -286,7 +286,7 @@ impl Bridge {
                 Some(BridgeEvent::Headers {
                     status: s, headers, ..
                 }) => {
-                    if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+                    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
                         eprintln!("[dsh-bridge] fetch_full headers {s}");
                     }
                     status = s;
@@ -296,7 +296,7 @@ impl Bridge {
                     chunks.push(data);
                 }
                 Some(BridgeEvent::End { .. }) => {
-                    if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+                    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
                         eprintln!("[dsh-bridge] fetch_full end");
                     }
                     break;
@@ -489,7 +489,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                 continue;
             };
             let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
-            if std::env::var("DSH_MAC_TRACE_BRIDGE").as_deref() == Ok("1") {
+            if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
                 eprintln!("[dsh-bridge] recv {kind} {:?}", msg.get("id"));
             }
             // Binary bulk path: header line followed by `len` raw bytes.
