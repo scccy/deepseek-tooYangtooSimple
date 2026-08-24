@@ -33,6 +33,7 @@
     "lib/stages.js",
     "lib/threads.js",
     "lib/worktree.js",
+    "web/bundle-dist/board.js",
     "cordis.patch.yml",
     "skills/",
     "README.md",

@@ -67,3 +67,76 @@ test('cancelInstance() cancels the whole instance and frees the workspace lock',
   const again = orchestrator.cancelInstance(instanceId, { actionId: 'act-del-1' })
   assert.equal(again.idempotent, true)
 })
+
+// ---- 暂停 / 继续 / 从暂停恢复回合（v0.8+：断电/重启/暂停后无需重开线程） ----
+
+test('pauseStage marks a running stage paused and keeps the workspace lock', () => {
+  const { ledger, orchestrator } = makeOrchestrator()
+  const { instanceId, stageRowId } = orchestrator.createInstance({ workspacePath: '/tmp/ws-p1', feature: 'pause feature' })
+  orchestrator.activateStage(instanceId, stageRowId, { threadId: 'thread-1', skillId: 'speckit-specify' })
+
+  const res = orchestrator.pauseStage(instanceId, stageRowId, { actionId: 'act-pause-1', reason: 'user pause' })
+  assert.equal(res.idempotent, false)
+  assert.equal(res.result.status, 'paused')
+
+  const stage = ledger.transaction((tx) => ledger.getStage(tx, stageRowId))
+  assert.equal(stage.status, 'paused')
+  // Lock is NOT released: the stage is only held, still the active stage.
+  assert.ok(ledger.transaction((tx) => ledger.lockFor(tx, '/tmp/ws-p1')), 'lock must stay held while paused')
+
+  // Idempotent on repeat with the same actionId.
+  const again = orchestrator.pauseStage(instanceId, stageRowId, { actionId: 'act-pause-1' })
+  assert.equal(again.idempotent, true)
+})
+
+test('resumeStage flips paused back to running (same thread, same attempt)', () => {
+  const { ledger, orchestrator } = makeOrchestrator()
+  const { instanceId, stageRowId } = orchestrator.createInstance({ workspacePath: '/tmp/ws-p2', feature: 'resume feature' })
+  orchestrator.activateStage(instanceId, stageRowId, { threadId: 'thread-2' })
+  orchestrator.pauseStage(instanceId, stageRowId, { actionId: 'act-p2' })
+
+  const res = orchestrator.resumeStage(instanceId, stageRowId, { actionId: 'act-r2' })
+  assert.equal(res.idempotent, false)
+  const stage = ledger.transaction((tx) => ledger.getStage(tx, stageRowId))
+  assert.equal(stage.status, 'running')
+  assert.equal(stage.thread_id, 'thread-2', 'resume must keep the SAME thread (no restart)')
+  assert.equal(stage.attempt, 1)
+})
+
+test('pause requires running; resume requires paused', () => {
+  const { orchestrator } = makeOrchestrator()
+  const { instanceId, stageRowId } = orchestrator.createInstance({ workspacePath: '/tmp/ws-p3', feature: 'gate feature' })
+  // createInstance leaves the row 'creating' → pause must throw invalid-state.
+  assert.throws(() => orchestrator.pauseStage(instanceId, stageRowId, { actionId: 'a1' }), /不能暂停/)
+  orchestrator.activateStage(instanceId, stageRowId, { threadId: 't' })
+  assert.throws(() => orchestrator.resumeStage(instanceId, stageRowId, { actionId: 'a2' }), /不能恢复/)
+})
+
+test('a paused stage absorbs a finished turn via processThreadTurn (idle edge)', () => {
+  const { ledger, orchestrator } = makeOrchestrator()
+  const { instanceId, stageRowId } = orchestrator.createInstance({ workspacePath: '/tmp/ws-p4', feature: 'idle feature' })
+  orchestrator.activateStage(instanceId, stageRowId, { threadId: 'thread-4' })
+  orchestrator.pauseStage(instanceId, stageRowId, { actionId: 'act-p4' })
+  // Thread actually finished while paused (state.json exists) → idle edge must
+  // advance it, never leave it stuck.
+  const res = orchestrator.processThreadTurn({
+    instanceId,
+    stageRowId,
+    threadState: { status: 'done', summary: 'paused-then-done' },
+    artifacts: []
+  })
+  assert.equal(res.status, 'awaiting-confirmation')
+  const stage = ledger.transaction((tx) => ledger.getStage(tx, stageRowId))
+  assert.equal(stage.status, 'awaiting-confirmation')
+})
+
+test('cancel works from paused (lock released)', () => {
+  const { ledger, orchestrator } = makeOrchestrator()
+  const { instanceId, stageRowId } = orchestrator.createInstance({ workspacePath: '/tmp/ws-p5', feature: 'cancel paused' })
+  orchestrator.activateStage(instanceId, stageRowId, { threadId: 'thread-5' })
+  orchestrator.pauseStage(instanceId, stageRowId, { actionId: 'act-p5' })
+  orchestrator.cancelStage(instanceId, stageRowId, { actionId: 'act-c5' })
+  const stage = ledger.transaction((tx) => ledger.getStage(tx, stageRowId))
+  assert.equal(stage.status, 'cancelled')
+  assert.equal(ledger.transaction((tx) => ledger.lockFor(tx, '/tmp/ws-p5')), null)
+})

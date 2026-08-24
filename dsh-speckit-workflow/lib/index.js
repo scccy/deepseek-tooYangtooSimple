@@ -20,7 +20,7 @@ import { isAbsolute, join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Ledger, DEFAULT_DB_PATH } from './db.js'
 import { Orchestrator, OrchestratorError } from './orchestrator.js'
-import { StageThreads, stateFileFor } from './threads.js'
+import { StageThreads, stateFileFor, RESUME_PROMPT } from './threads.js'
 import { COLUMNS, STAGE_DEFS, permittedActions, previousPhaseStart, phaseName } from './stages.js'
 import { readFeatureJson } from './worktree.js'
 
@@ -31,6 +31,13 @@ export const RPC_CHANNEL = '/api/dsh-speckit-workflow'
 export const inject = ['tools', 'systemPrompt', 'agents', 'webServer', 'workspaceRegistry', 'subagents', 'llm']
 
 export const PLUGIN_VERSION = '0.8.0'
+
+// 看板消息可投递进线程的阶段状态：活跃状态与「已暂停 / 已结束但仍是当前阶段」
+// 的终态。发送消息会把非 running 的行重新拉回 running，在同一个线程上继续，
+// 因此「暂停后继续」「失败后继续对话」「断电/重启后继续」都无需重新开线程。
+const THREAD_ACCEPT_STATUSES = new Set(['running', 'awaiting-user', 'awaiting-confirmation', 'paused', 'completed', 'failed', 'cancelled'])
+// 真正占用工作区的活跃状态：若其它阶段正处其中，旧线程不允许继续（避免双线程）。
+const THREAD_LIVE_STATUSES = new Set(['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused'])
 
 const BUNDLED_SKILLS = {
   specify: 'speckit-specify',
@@ -488,7 +495,7 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
       const activeStage = ledger.transaction((tx) => {
         const stages = ledger.listStages(tx, instance.instance_id)
         return stages
-          .filter((stage) => ['running', 'awaiting-user', 'awaiting-confirmation', 'creating'].includes(stage.status))
+          .filter((stage) => ['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused'].includes(stage.status))
           .sort((a, b) => b.attempt - a.attempt)[0]
       })
       if (activeStage && activeStage.status === 'running' && activeStage.thread_id) {
@@ -515,10 +522,11 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
     }
 
     case 'thread-message': {
-      // Deliver an arbitrary board message into a stage thread and, when the
-      // stage is parked at a confirmation point, pull it back to 'running' so
-      // the thread's next turn is re-absorbed by the idle edge. This is the
-      // "enter the thread and keep talking at any stage" interaction.
+      // 把看板消息投递进阶段线程（"继续对话"）。任何仍在衔接中的阶段
+      // （running / awaiting-* / paused，以及已是当前阶段的终态行）都可以
+      // 继续：非 running 的行先被拉回 running，再 followup 同一线程，
+      // 线程再跑一个回合，结束后由 idle 边缘把结果重新吸收进账本。
+      // 这样暂停后继续、失败后继续追问、断电/重启后继续都不需要重开线程。
       const instance = resolveInstance()
       const stageRowId = payload.stageRowId ? Number(payload.stageRowId) : null
       let stageRow = null
@@ -530,17 +538,40 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
       if (!stageRow.thread_id) throw new OrchestratorError('invalid-state', '该阶段没有可交互的线程（请先重跑本阶段创建线程）')
       const text = String(payload.text || '').trim()
       if (!text) throw new OrchestratorError('bad-request', '消息内容不能为空')
-      if (!['running', 'awaiting-user', 'awaiting-confirmation'].includes(stageRow.status)) {
-        throw new OrchestratorError('invalid-state', `阶段 ${stageRow.status} 的线程已结束；如需继续，请使用「重跑/重试」创建新线程`)
+      if (!THREAD_ACCEPT_STATUSES.has(stageRow.status)) {
+        throw new OrchestratorError('invalid-state', `阶段 ${stageRow.status} 无法接收消息（如需重新开始，请使用「重跑/重试」）`)
       }
       if (stageRow.status !== 'running') {
+        // 终态/暂停的线程重新打开为 running 之前，校验它是本阶段最新的一次
+        // attempt，且实例里没有其它活跃阶段在跑（否则会双线程并发）。
+        const gate = ledger.transaction((tx) => {
+          const all = ledger.listStages(tx, instance.instance_id)
+          const latest = all.filter((s) => s.stage_id === stageRow.stage_id).sort((a, b) => b.id - a.id)[0]
+          if (latest && latest.id !== stageRow.id) return 'superseded'
+          if (stageRow.status === 'stale') return 'stale'
+          const liveOthers = all.filter((s) => s.id !== stageRow.id && THREAD_LIVE_STATUSES.has(s.status))
+          return liveOthers.length > 0 ? 'busy' : null
+        })
+        if (gate) {
+          throw new OrchestratorError('invalid-state',
+            gate === 'superseded'
+              ? '该阶段已有更新的 attempt，无法继续旧线程；请操作最新一次执行。'
+              : gate === 'stale'
+                ? '该阶段已因上游变更而过期，无法继续旧线程；请使用「从该阶段重新开始」。'
+                : '该阶段已交接给后续阶段，无法继续旧线程（避免两条线程同时执行）。如需重新开始请使用「重跑/重试」。')
+        }
         ledger.transaction((tx) => {
           const fresh = ledger.getStage(tx, stageRow.id)
-          if (fresh && fresh.status !== 'running') {
-            fresh.status = 'running'
-            fresh.ended_at = null
-            ledger.updateStage(tx, fresh)
-          }
+          if (!fresh) return
+          fresh.status = 'running'
+          fresh.ended_at = null
+          fresh.error = null
+          ledger.updateStage(tx, fresh)
+          ledger.insertDecision(tx, {
+            instance_id: instance.instance_id, stage_row: stageRow.id, kind: 'thread-continue',
+            target_stage: stageRow.stage_id, note: text.slice(0, 2000), at: new Date().toISOString()
+          })
+          ledger.appendEvents(tx, [orchestrator.event(instance.instance_id, 'stage-continued', { stageId: stageRow.stage_id, attempt: stageRow.attempt, threadId: stageRow.thread_id }, stageRow.thread_id)])
         })
       }
       await threads.followup(parentOf(instance), stageRow.thread_id, text, 'board-interact')
@@ -555,7 +586,86 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
         })
         ledger.appendEvents(tx, [orchestrator.event(instance.instance_id, 'stage-message', { stageId: stageRow.stage_id, attempt: stageRow.attempt, threadId: stageRow.thread_id }, stageRow.thread_id)])
       })
-      return { ok: true, value: { delivered: true, threadId: stageRow.thread_id } }
+      return { ok: true, value: { delivered: true, threadId: stageRow.thread_id, status: 'running' } }
+    }
+
+    case 'thread-pause': {
+      // 暂停正在执行的线程：先把账本行标记为 paused（幂等），再中断线程。
+      // 中断后线程停在原地，绝不把没写完 state.json 的半程回合误判为失败；
+      // 之后发送消息或「继续」会在同一线程上恢复。
+      const instance = resolveInstance()
+      const stageRowId = payload.stageRowId ? Number(payload.stageRowId) : null
+      let stageRow = null
+      if (stageRowId) stageRow = ledger.transaction((tx) => ledger.getStage(tx, stageRowId))
+      if (!stageRow && payload.threadId) {
+        stageRow = ledger.transaction((tx) => ledger.findStageByThread(tx, String(payload.threadId)))
+      }
+      if (!stageRow) throw new OrchestratorError('not-found', 'thread/stage not found')
+      if (stageRow.status !== 'running') {
+        return { ok: true, value: { paused: true, idempotent: true, threadId: stageRow.thread_id, status: stageRow.status } }
+      }
+      const actionId = String(payload.actionId || '')
+      if (!actionId) throw new OrchestratorError('bad-request', 'actionId is required')
+      const paused = orchestrator.pauseStage(instance.instance_id, stageRow.id, { actionId, reason: '用户暂停线程' })
+      if (stageRow.thread_id) {
+        await threads.interrupt(stageRow.thread_id, parentOf(instance))
+      }
+      return { ok: true, value: { paused: true, ...(paused.result || {}) } }
+    }
+
+    case 'thread-resume': {
+      // 恢复已暂停的线程：同一线程 followup "继续" 唤醒它，继续完成回合。
+      const instance = resolveInstance()
+      const actionId = String(payload.actionId || '')
+      if (!actionId) throw new OrchestratorError('bad-request', 'actionId is required')
+      const stageRowId = payload.stageRowId ? Number(payload.stageRowId) : null
+      let stageRow = null
+      if (stageRowId) stageRow = ledger.transaction((tx) => ledger.getStage(tx, stageRowId))
+      if (!stageRow && payload.threadId) {
+        stageRow = ledger.transaction((tx) => ledger.findStageByThread(tx, String(payload.threadId)))
+      }
+      if (!stageRow) throw new OrchestratorError('not-found', 'thread/stage not found')
+      if (stageRow.status === 'running') {
+        return { ok: true, value: { resumed: true, idempotent: true, threadId: stageRow.thread_id, status: 'running' } }
+      }
+      if (stageRow.status !== 'paused') {
+        throw new OrchestratorError('invalid-state', `阶段状态 ${stageRow.status} 不能恢复（仅已暂停的阶段可恢复）`)
+      }
+      if (!stageRow.thread_id) throw new OrchestratorError('invalid-state', '该阶段没有可恢复的线程')
+      const resumed = orchestrator.resumeStage(instance.instance_id, stageRow.id, { actionId, reason: '用户继续执行线程' })
+      await threads.followup(parentOf(instance), stageRow.thread_id, RESUME_PROMPT, 'board-resume')
+      return { ok: true, value: { resumed: true, ...(resumed.result || {}) } }
+    }
+
+    case 'thread-tail': {
+      // 主通道的增量事件尾（重启后依然可用，不依赖动态插件）。
+      const threadId = typeof payload.threadId === 'string' ? payload.threadId.trim() : ''
+      if (!threadId) throw new OrchestratorError('bad-request', 'threadId is required')
+      const fromSeq = Math.max(0, Number(payload.fromSeq) || 0)
+      const sp = ctx.get ? ctx.get('sessionPersistence') : undefined
+      let events = []
+      if (sp && typeof sp.readFrom === 'function') {
+        try {
+          const read = await sp.readFrom(threadId, fromSeq)
+          events = (read && Array.isArray(read.events)) ? read.events : []
+        } catch {
+          events = []
+        }
+      }
+      let nextSeq = fromSeq
+      for (const ev of events) {
+        const s = Number(ev && ev.seq)
+        if (Number.isFinite(s) && s >= nextSeq) nextSeq = s + 1
+      }
+      return { ok: true, value: { threadId, fromSeq, nextSeq, events: snapshotOf(events) } }
+    }
+
+    case 'thread-history': {
+      // 主通道的持久化对话兜底：从持久化会话日志折叠全部消息（重启后可用）。
+      const threadId = typeof payload.threadId === 'string' ? payload.threadId.trim() : ''
+      if (!threadId) throw new OrchestratorError('bad-request', 'threadId is required')
+      const messages = await persistedThreadMessages(ctx, threadId)
+      return { ok: true, value: { threadId, messages } }
     }
 
     case 'artifact-read': {
@@ -617,10 +727,45 @@ function sanitizeStage(stageRow) {
   }
 }
 
+/** 从持久化会话日志折叠出线程的全部消息（不依赖 live agent，重启后可用）。 */
+async function persistedThreadMessages(ctx, threadId) {
+  const sp = ctx.get ? ctx.get('sessionPersistence') : undefined
+  if (!sp || typeof sp.readFrom !== 'function') return []
+  let events = []
+  try {
+    const read = await sp.readFrom(threadId, 0)
+    events = (read && Array.isArray(read.events)) ? read.events : []
+  } catch {
+    return []
+  }
+  const out = []
+  for (const event of events) {
+    if (!event) continue
+    if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+    const data = event.data && typeof event.data === 'object' ? event.data : {}
+    const content = Array.isArray(data.content)
+      ? data.content
+      : (data.message && Array.isArray(data.message.content) ? data.message.content : null)
+    if (!Array.isArray(content)) continue
+    const text = content
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('\n')
+      .trim()
+    if (!text) continue
+    out.push({
+      who: event.type === 'user/message' ? 'user' : 'assistant',
+      text,
+      at: typeof event.time === 'number' ? event.time : 0
+    })
+  }
+  return out.slice(-160)
+}
+
 async function buildDetailView(ctx, threads, ledger, orchestrator, instance, detail) {
   const stages = detail.stages.map((stage) => {
     const def = STAGE_DEFS[stage.stage_id]
-    const active = stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'awaiting-confirmation' || stage.status === 'creating'
+    const active = stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'awaiting-confirmation' || stage.status === 'creating' || stage.status === 'paused'
     return {
       id: stage.id,
       stageId: stage.stage_id,
@@ -644,7 +789,7 @@ async function buildDetailView(ctx, threads, ledger, orchestrator, instance, det
     }
   })
   // Thread messages for the current active stage.
-  const activeStage = stages.find((stage) => stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'awaiting-confirmation' || stage.status === 'creating')
+  const activeStage = stages.find((stage) => stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'awaiting-confirmation' || stage.status === 'creating' || stage.status === 'paused')
   let thread = null
   if (activeStage && activeStage.threadId) {
     thread = {
@@ -682,7 +827,7 @@ async function buildDetailView(ctx, threads, ledger, orchestrator, instance, det
 function boardActionsFor(card) {
   // Compact action set for the board card (no drawer needed for these).
   const actions = []
-  if (card.currentStageStatus === 'running') actions.push('thread')
+  if (card.currentStageStatus === 'running' || card.currentStageStatus === 'paused') actions.push('thread')
   if (card.currentStageStatus === 'awaiting-confirmation') {
     actions.push('thread')
     const def = STAGE_DEFS[card.currentStage]
@@ -864,6 +1009,42 @@ export function apply(ctx) {
     handler: handleRpc
   })
 
+  // ---- durable bundle route ---------------------------------------------------
+  // 即使动态插件（spkbw-1）在重启后尚未重建，工作台 bundle 依然可从主通道同源
+  // 路径加载；前端/动态客户端优先使用该路径，失败再回退 /api/dsh-spkb-web/board.js。
+  const BOARD_BUNDLE_PATH = (() => {
+    try {
+      return fileURLToPath(new URL('../web/bundle-dist/board.js', import.meta.url))
+    } catch {
+      return null
+    }
+  })()
+  let boardBundleCache = null
+  let boardBundleMtime = 0
+  const loadBoardBundle = async () => {
+    if (!BOARD_BUNDLE_PATH || !existsSync(BOARD_BUNDLE_PATH)) return null
+    const mtime = statSync(BOARD_BUNDLE_PATH).mtimeMs
+    if (boardBundleCache === null || mtime !== boardBundleMtime) {
+      boardBundleCache = await readFile(BOARD_BUNDLE_PATH, 'utf8')
+      boardBundleMtime = mtime
+    }
+    return boardBundleCache
+  }
+  const disposeBoardRoute = ctx.webServer.register({
+    kind: 'exact',
+    path: '/api/dsh-speckit-workflow/board.js',
+    handler: async (req, res) => {
+      let body = null
+      try {
+        body = await loadBoardBundle()
+      } catch (error) {
+        body = `// board bundle error: ${String((error && error.message) || error)}`
+      }
+      res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' })
+      res.end(body || '// board bundle not found')
+    }
+  })
+
   // Recover dangling ledger state on mount (threads are durable and survive
   // restarts; only the in-process listener is new).
   const recoveryTimer = setTimeout(() => {
@@ -877,6 +1058,7 @@ export function apply(ctx) {
     try { if (typeof disposeTool === 'function') await disposeTool() } catch (error) {
       ctx.logger.warn(`dsh-speckit-workflow: tool cleanup failed: ${String((error && error.message) || error)}`)
     }
+    try { if (typeof disposeBoardRoute === 'function') await disposeBoardRoute() } catch { /* noop */ }
     try { if (typeof disposeRoute === 'function') await disposeRoute() } catch (error) {
       ctx.logger.warn(`dsh-speckit-workflow: route cleanup failed: ${String((error && error.message) || error)}`)
     }

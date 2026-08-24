@@ -203,11 +203,13 @@ export default function App({ initialWorkspace = null }) {
     if (!instanceId || stageRowId == null) return
     try {
       const value = await callHost('thread-view', { instanceId, stageRowId: Number(stageRowId) })
-      setThread({ ...value, messages: [] })
+      const liveMessages = Array.isArray(value.messages) ? value.messages : []
+      setThread({ ...value, messages: liveMessages })
       setThreadOpen(true)
       const threadId = value.threadId || null
       if (!threadId) return
-      // 从事件尾折叠出完整历史与流式增量，避免 live 消息为空。
+      // 从事件尾折叠出完整历史与流式增量，避免 live 消息为空；折叠从空列表开始
+      // 以去重（live 消息与持久化事件是同一批内容的两种读法）。
       tailSeqRef.current = 0
       const tail = await threadTail(threadId, 0)
       if (tail) {
@@ -215,7 +217,7 @@ export default function App({ initialWorkspace = null }) {
         const events = Array.isArray(tail.events) ? tail.events : []
         setThread((current) => {
           if (!current || current.threadId !== threadId) return current
-          return { ...current, messages: applyThreadEvents(current.messages || [], events) }
+          return { ...current, messages: applyThreadEvents([], events) }
         })
       }
     } catch (error) {
@@ -365,6 +367,16 @@ export default function App({ initialWorkspace = null }) {
           showToast('已取消')
           break
         }
+        case 'pause': {
+          await run(() => callHost('thread-pause', { instanceId, stageRowId: row.id, threadId: row.threadId }))
+          showToast('已暂停线程（可继续执行或继续对话）')
+          break
+        }
+        case 'resume': {
+          await run(() => callHost('thread-resume', { instanceId, stageRowId: row.id, threadId: row.threadId }))
+          showToast('已继续执行（同一线程恢复）')
+          break
+        }
         case 'rollback': {
           const ok = await askConfirm('返回上阶段', '将重新执行上一阶段并标记后续阶段过期。')
           if (!ok) return
@@ -498,6 +510,33 @@ export default function App({ initialWorkspace = null }) {
     }
   }, [run, thread, refreshDetail, showToast])
 
+  // ---- thread pause / resume (same thread, no re-spawn) ----------------------
+  const pauseThread = useCallback(async () => {
+    const instanceId = instanceIdRef.current
+    const tr = threadRef.current
+    if (!instanceId || !tr || !tr.stageRow) return
+    try {
+      await run(() => callHost('thread-pause', { instanceId, stageRowId: Number(tr.stageRow.id), threadId: tr.threadId }))
+      showToast('已暂停线程（可继续执行或继续对话）')
+      await refreshDetail()
+    } catch (error) {
+      showToast(error.message)
+    }
+  }, [run, showToast, refreshDetail])
+
+  const resumeThread = useCallback(async () => {
+    const instanceId = instanceIdRef.current
+    const tr = threadRef.current
+    if (!instanceId || !tr || !tr.stageRow) return
+    try {
+      await run(() => callHost('thread-resume', { instanceId, stageRowId: Number(tr.stageRow.id), threadId: tr.threadId }))
+      showToast('已继续执行（同一线程恢复）')
+      await refreshDetail()
+    } catch (error) {
+      showToast(error.message)
+    }
+  }, [run, showToast, refreshDetail])
+
   // ---- artifact ----------------------------------------------------------------
   const readArtifact = useCallback(async (path) => {
     const instanceId = instanceIdRef.current
@@ -610,6 +649,8 @@ export default function App({ initialWorkspace = null }) {
         busy={busy}
         onClose={closeThread}
         onSendAnswer={sendAnswer}
+        onPauseThread={pauseThread}
+        onResumeThread={resumeThread}
         onRefresh={() => thread && thread.stageRow && openThread(thread.stageRow.id, threadStageId)}
       />
 

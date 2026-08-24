@@ -83,3 +83,74 @@ test('followup passes a defined AbortSignal to subagents.followup', async () => 
   assert.ok(signalSpy.followup !== undefined, 'followup must be called with a signal')
   assert.ok(signalSpy.followup instanceof AbortSignal, 'signal passed to followup must be an AbortSignal')
 })
+
+// ---- 暂停/重启恢复：paused + 无 state.json → 保持暂停，绝不失败 -----------------
+
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import { join } from 'node:path'
+
+function buildIdleThreads(subagents, ledger = { transaction: (fn) => fn({}) }) {
+  const orchestrator = {
+    activateStage: () => {},
+    currentStageRow: () => ({ status: 'running', thread_id: 'child-1' }),
+    event: () => ({}),
+    failStage: () => {},
+    processThreadTurn: () => ({ ok: true, status: 'awaiting-confirmation' })
+  }
+  const ctx = { subagents, logger: { warn() {}, info() {} } }
+  const threads = new StageThreads({ ctx, ledger, orchestrator, config: { provider: 'spawn' } })
+  threads.composeStage = async () => ({ persona: 'p', prompt: 'x' })
+  threads.resolveRoute = async () => null
+  threads.priorStageRows = async () => []
+  threads.providerDescriptor = () => ({})
+  return { threads, orchestrator }
+}
+
+test('processIdle keeps a paused stage paused when state.json is absent (no fake failure)', async () => {
+  const dir = mkdtempSync(join(os.tmpdir(), 'spk-paused-'))
+  const instance = { instance_id: 'i-p1', workspace_path: dir, execution_root: dir }
+  const stageRow = { id: 7, stage_id: 'implement', attempt: 2, status: 'paused', thread_id: 'child-p1' }
+  const subagents = buildMockSubagents({})
+  const { threads, orchestrator } = buildIdleThreads(subagents, {
+    transaction: (fn) => fn({})
+  })
+  let failed = false
+  orchestrator.failStage = () => { failed = true }
+
+  const result = await threads.processIdle({ instance, stageRow })
+
+  assert.equal(result.status, 'paused', 'paused + no state must stay paused')
+  assert.equal(failed, false, 'an interrupted thread must never be failed for missing state.json')
+})
+
+test('processIdle advances a paused stage when state.json exists (thread actually finished)', async () => {
+  const dir = mkdtempSync(join(os.tmpdir(), 'spk-paused-done-'))
+  const instance = { instance_id: 'i-p2', workspace_path: dir, execution_root: dir }
+  const stageRow = { id: 8, stage_id: 'specify', attempt: 1, status: 'paused', thread_id: 'child-p2' }
+  const subagents = buildMockSubagents({})
+  let turned = null
+  const orchestrator = {
+    processThreadTurn: (input) => { turned = input; return { ok: true, status: 'awaiting-confirmation' } },
+    event: () => ({}),
+    failStage: () => {}
+  }
+  const ctx = { subagents, logger: { warn() {}, info() {} } }
+  const threads = new StageThreads({ ctx, ledger: { transaction: (fn) => fn({}) }, orchestrator, config: { provider: 'spawn' } })
+  threads.composeStage = async () => ({ persona: 'p', prompt: 'x' })
+  threads.resolveRoute = async () => null
+  threads.priorStageRows = async () => []
+  threads.providerDescriptor = () => ({})
+  // This test targets the pause→done idle path, not the Specify worktree handoff.
+  threads.performWorktreeHandoff = async () => {}
+
+  // Write the protocol state file the thread produced before it was interrupted.
+  const stateDir = join(dir, '.dsh', 'speckit-workflow', 'instances', 'i-p2', 'stages')
+  mkdirSync(stateDir, { recursive: true })
+  const stateFile = join(stateDir, 'specify-1.state.json')
+  writeFileSync(stateFile, JSON.stringify({ status: 'done', summary: 'finished' }), 'utf8')
+
+  const result = await threads.processIdle({ instance, stageRow })
+  assert.ok(turned, 'processIdle must hand the finished turn to processThreadTurn')
+  assert.ok(result.ok)
+})

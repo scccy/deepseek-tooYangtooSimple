@@ -207,6 +207,7 @@ export const STATUS_META = {
   running: ['进行中', 'running'],
   'awaiting-user': ['等待你回答', 'review'],
   'awaiting-confirmation': ['等待确认', 'review'],
+  paused: ['已暂停', 'review'],
   completed: ['已完成', 'completed'],
   skipped: ['已跳过', 'pending'],
   cancelled: ['已取消', 'blocked'],
@@ -232,6 +233,12 @@ export function permittedActions(stageRow, isCurrent) {
   switch (status) {
     case 'running':
       actions.push({ id: 'thread', label: '进入线程' })
+      actions.push({ id: 'pause', label: '暂停' })
+      actions.push({ id: 'cancel-current', label: '停止阶段', danger: true })
+      break
+    case 'paused':
+      if (hasThread) actions.push({ id: 'thread', label: '继续对话' })
+      actions.push({ id: 'resume', label: '继续执行' })
       actions.push({ id: 'cancel-current', label: '停止阶段', danger: true })
       break
     case 'awaiting-user':
@@ -249,7 +256,7 @@ export function permittedActions(stageRow, isCurrent) {
       actions.push({ id: 'cancel-current', label: '取消', danger: true })
       break
     case 'completed':
-      if (hasThread) actions.push({ id: 'thread', label: '查看线程' })
+      if (hasThread) actions.push({ id: 'thread', label: '继续对话' })
       actions.push({ id: 'artifacts', label: '查看结果' })
       actions.push({ id: 'redo', label: '重跑阶段' })
       if (stageRow && stageRow.attempt > 1) actions.push({ id: 'history', label: '查看历史' })
@@ -258,7 +265,7 @@ export function permittedActions(stageRow, isCurrent) {
       actions.push({ id: 'redo', label: '重新执行' })
       break
     case 'failed':
-      if (hasThread) actions.push({ id: 'thread', label: '查看线程' })
+      if (hasThread) actions.push({ id: 'thread', label: '继续对话' })
       actions.push({ id: 'error', label: '查看错误' })
       actions.push({ id: 'redo', label: '重试' })
       actions.push({ id: 'rollback', label: '返回上阶段' })

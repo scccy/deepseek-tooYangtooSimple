@@ -4,7 +4,7 @@ import { formatTime } from '../lib/format.js'
 import Journey from './Journey.jsx'
 import StageRow from './StageRow.jsx'
 
-const ACTIVE_STATUSES = ['running', 'awaiting-user', 'awaiting-confirmation', 'creating']
+const ACTIVE_STATUSES = ['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused']
 
 export default function InstanceDrawer({
   open,
@@ -30,6 +30,27 @@ export default function InstanceDrawer({
       <button key="end" className="btn" onClick={() => !busy && onStageAction({ id: 'end-interactive' }, active)}>
         <Icon name="check" />
         结束交互
+      </button>
+    )
+  } else if (active && active.status === 'paused') {
+    footActions.push(
+      <button key="resume" className="btn btn-primary" onClick={() => !busy && onStageAction({ id: 'resume' }, active)}>
+        <Icon name="play" />
+        继续执行
+      </button>
+    )
+    if (active.threadId) {
+      footActions.push(
+        <button key="thread" className="btn" onClick={() => !busy && onOpenThread(active.id, active.stageId)}>
+          <Icon name="message" />
+          继续对话
+        </button>
+      )
+    }
+    footActions.push(
+      <button key="cancel" className="btn btn-danger" onClick={() => !busy && onStageAction((active.actions || []).find((a) => a.id === 'cancel-current') || { id: 'cancel-current' }, active)}>
+        <Icon name="trash" />
+        停止阶段
       </button>
     )
   } else if (active && active.status === 'awaiting-confirmation') {

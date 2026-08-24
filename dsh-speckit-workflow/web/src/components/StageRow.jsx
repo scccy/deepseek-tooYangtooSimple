@@ -13,8 +13,10 @@ function actionClass(action) {
 export default function StageRow({ row, onAction, onReadArtifact, onOpen }) {
   // 显式渲染进入线程按钮后，过滤掉宿主动作里重复的 thread 动作。
   const actions = (row.actions || []).filter((action) => !(onOpen && action.id === 'thread'))
-  const isLive = ['running', 'awaiting-user', 'awaiting-confirmation', 'creating'].includes(row.status)
-  const openLabel = isLive ? '进入线程' : '查看对话'
+  const isLive = ['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused'].includes(row.status)
+  // 终态当前阶段（已完成/失败/取消）现在也能继续对话，标签从“查看对话”升级为“继续对话”。
+  const continuable = ['paused', 'completed', 'failed', 'cancelled'].includes(row.status)
+  const openLabel = isLive && !continuable ? '进入线程' : continuable ? '继续对话' : '查看对话'
 
   const artifactChips = (row.artifacts || []).slice(0, 8).map((artifact) => {
     const name = (artifact.rel || '').split('/').filter(Boolean).pop() || artifact.rel

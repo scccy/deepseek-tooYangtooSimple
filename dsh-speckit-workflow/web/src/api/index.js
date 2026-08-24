@@ -29,6 +29,10 @@ const ENDPOINT_TO_METHOD = {
   'stage-cancel': 'stageCancel',
   'thread-view': 'threadView',
   'thread-message': 'threadMessage',
+  'thread-pause': 'threadPause',
+  'thread-resume': 'threadResume',
+  'thread-tail': 'threadTail',
+  'thread-history': 'threadHistory',
   'artifact-read': 'artifactRead',
   'events-since': 'eventsSince'
 }
@@ -93,44 +97,16 @@ async function realTransport(endpoint, payload = {}) {
   return adapt(endpoint, result.value)
 }
 
-// 预览期：thread-message 由动态插件临时代理（发布时后端 lib/index.js 已注册到
-// 主通道 /api/dsh-speckit-workflow，删除该特判即可）。
-async function realThreadMessage(payload) {
-  const sessionId = sessionIdResolver ? sessionIdResolver() : null
-  if (!sessionId) throw new Error('缺少当前会话 sessionId（请先打开一个会话后重试）')
-  const body = { sessionId, ...(payload || {}) }
-  const response = await window.fetch('/api/dsh-spkb-web/thread-message', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
-  const result = await response.json().catch(() => null)
-  if (!response.ok || !result || result.ok !== true) {
-    throw new Error((result && result.error && result.error.message) || `宿主请求失败（${response.status || '网络错误'}）`)
-  }
-  return result.value
-}
-
 // ---- 线程历史（持久化会话日志兜底）-----------------------------------------
 // 线程子会话的重启后 live 会话可能已被回收；从持久化日志恢复对话，保证
-// 「进入线程 / 查看对话」始终能看到历史消息。
+// 「进入线程 / 查看对话」始终能看到历史消息。走主通道 /api/dsh-speckit-workflow，
+// 不再依赖动态插件（重启后依然可用）。
 export async function fetchThreadHistory(threadId) {
-  if (!threadId) return null
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 8000)
+  if (!threadId || !realHostActive) return null
   try {
-    const response = await window.fetch('/api/dsh-spkb-web/thread-history', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadId }),
-      signal: controller.signal
-    })
-    const result = await response.json().catch(() => null)
-    return response.ok && result && result.ok === true ? result.value : null
+    return await realTransport('thread-history', { threadId })
   } catch {
     return null
-  } finally {
-    window.clearTimeout(timer)
   }
 }
 
@@ -150,22 +126,11 @@ export function mergeThreadMessages(live, history) {
 
 // ---- 线程事件尾（增量折叠：真实流式，而非整页轮询）------------------------
 export async function threadTail(threadId, fromSeq) {
-  if (!threadId) return null
-  const controller = new AbortController()
-  const timer = window.setTimeout(() => controller.abort(), 5000)
+  if (!threadId || !realHostActive) return null
   try {
-    const response = await window.fetch('/api/dsh-spkb-web/thread-tail', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threadId, fromSeq: Number(fromSeq) || 0 }),
-      signal: controller.signal
-    })
-    const result = await response.json().catch(() => null)
-    return response.ok && result && result.ok === true ? result.value : null
+    return await realTransport('thread-tail', { threadId, fromSeq: Number(fromSeq) || 0 })
   } catch {
     return null
-  } finally {
-    window.clearTimeout(timer)
   }
 }
 

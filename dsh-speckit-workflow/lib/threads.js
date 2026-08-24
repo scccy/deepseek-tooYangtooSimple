@@ -50,6 +50,10 @@ export function stateFileFor(workspacePath, instanceId, stageId, attempt) {
   return join(workspacePath, '.dsh', 'speckit-workflow', 'instances', instanceId, 'stages', `${stageId}-${attempt}.state.json`)
 }
 
+/** Prompt delivered when a paused thread is resumed ("继续执行"). */
+export const RESUME_PROMPT =
+  '请继续你正在进行的阶段工作：从被暂停的地方接着完成当前任务，完成后按协议把执行状态写入 state.json 并结束回合。不要重新开始，也不要重复已完成的工作。'
+
 export class StageThreads {
   /**
    * @param {object} deps
@@ -309,7 +313,7 @@ export class StageThreads {
    * @param {object} input { instance, stageRow, parentAgent? }
    */
   async processIdle({ instance, stageRow, parentAgent }) {
-    if (stageRow.status !== 'running' && stageRow.status !== 'awaiting-user') return { ok: true, ignored: true }
+    if (!['running', 'awaiting-user', 'paused'].includes(stageRow.status)) return { ok: true, ignored: true }
     const stateFile = stateFileFor(instance.workspace_path, instance.instance_id, stageRow.stage_id, stageRow.attempt)
     let state = null
     try {
@@ -317,6 +321,10 @@ export class StageThreads {
     } catch {
       state = null
     }
+    // A paused thread that has NOT produced a state file is simply held —
+    // resume delivers a followup and it keeps working. Never fail a held
+    // (interrupted) thread just because state.json is absent.
+    if (!state && stageRow.status === 'paused') return { ok: true, status: 'paused' }
     const executionRoot = instance.execution_root || instance.workspace_path
     const rels = state && Array.isArray(state.artifacts) ? state.artifacts.map((entry) => (typeof entry === 'string' ? entry : entry && entry.rel)).filter(Boolean) : []
     const artifacts = await collectArtifacts(executionRoot, rels)
@@ -401,8 +409,12 @@ export class StageThreads {
   /**
    * On plugin mount: reconcile dangling ledger state with reality.
    *  - 'creating' rows (crash between confirm and thread bind) → failed.
-   *  - running/awaiting-user rows whose thread is idle or gone → re-run the
-   *    idle edge so awaiting-interaction completes without losing the queue.
+   *  - 'running' rows whose thread is absent (process died mid-turn /
+   *    power loss / restart) AND no state file was produced → 'paused'
+   *    (resumable via continue-conversation), never silently failed.
+   *  - running/awaiting-user/paused rows whose thread is idle or gone →
+   *    re-run the idle edge so awaiting-interaction completes without
+   *    losing the queue.
    * Active live threads (status running) are left alone.
    */
   async recover() {
@@ -412,7 +424,7 @@ export class StageThreads {
       for (const instance of instances) {
         if (instance.status !== 'active') continue
         for (const stage of this.ledger.listStages(tx, instance.instance_id)) {
-          if (stage.status === 'creating' || stage.status === 'running' || stage.status === 'awaiting-user') {
+          if (stage.status === 'creating' || stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'paused') {
             result.push({ instance, stage })
           }
         }
@@ -428,6 +440,25 @@ export class StageThreads {
       }
       const live = stage.thread_id ? this.ctx.agents.get(stage.thread_id) : undefined
       if (live && live.status === 'running') continue
+      let hasState = false
+      try {
+        hasState = existsSync(stateFileFor(instance.workspace_path, instance.instance_id, stage.stage_id, stage.attempt))
+      } catch {
+        hasState = false
+      }
+      if (stage.status === 'running' && !live && !hasState) {
+        // 执行被进程中断（断电/重启/崩溃）：线程还在半程，没有任何 state 产物。
+        // 标记为「已暂停」而不是失败 —— 用户随后继续对话即可在同一线程上恢复。
+        try {
+          this.orchestrator.pauseStage(instance.instance_id, stage.id, {
+            actionId: newActionId(),
+            reason: '执行中断（进程重启/断电）：线程未完成回合，已自动暂停，可在线程对话中继续'
+          })
+        } catch (error) {
+          this.ctx?.logger?.warn(`speckit-workflow: recovery pause for ${stage.id} failed: ${String(error)}`)
+        }
+        continue
+      }
       // idle or resumable-but-stopped — process the state file again.
       try {
         await this.processIdle({ instance, stageRow: stage })

@@ -7,6 +7,7 @@ const STAGE_DOT = {
   running: 'live',
   'awaiting-user': 'ask',
   'awaiting-confirmation': 'hold',
+  paused: 'hold',
   completed: 'done',
   failed: 'failed',
   cancelled: 'failed',
@@ -18,6 +19,7 @@ const STAGE_TEXT = {
   running: '线程执行中',
   'awaiting-user': '等待你回答',
   'awaiting-confirmation': '等待确认',
+  paused: '已暂停',
   completed: '已完成',
   failed: '失败',
   cancelled: '已取消',
@@ -25,7 +27,7 @@ const STAGE_TEXT = {
   skipped: '已跳过'
 }
 
-export default function ThreadModal({ open, thread, onClose, onSendAnswer, onRefresh, busy }) {
+export default function ThreadModal({ open, thread, busy, onClose, onSendAnswer, onPauseThread, onResumeThread, onRefresh }) {
   const [value, setValue] = useState('')
   const [stickBottom, setStickBottom] = useState(true)
   const chatRef = useRef(null)
@@ -71,15 +73,18 @@ export default function ThreadModal({ open, thread, onClose, onSendAnswer, onRef
   const title = `线程 · ${stageRow ? `${stageRow.stageId}#${stageRow.attempt}` : ''}`
   const dotClass = STAGE_DOT[stageStatus] || 'done'
   const statusText = STAGE_TEXT[stageStatus] || (stageStatus || '未知')
-  const canInteract = ['running', 'awaiting-user', 'awaiting-confirmation'].includes(stageStatus)
+  const canInteract = ['running', 'awaiting-user', 'awaiting-confirmation', 'paused', 'completed', 'failed', 'cancelled'].includes(stageStatus)
   const interactive = stageRow && (stageRow.stageId === 'clarify' || stageRow.stageId === 'converge')
   const executing = stageStatus === 'running'
+  const paused = stageStatus === 'paused'
 
   const composerHint = executing
-    ? '线程正在执行，回复会自动出现在上方'
-    : stageStatus === 'awaiting-user'
-      ? '输入回答，Enter 发送'
-      : '可以继续追问，线程会再执行一个回合'
+    ? '线程正在执行，可随时「暂停」；回复会自动接续到线程'
+    : paused
+      ? '线程已暂停：可「继续执行」恢复本次执行，或直接发消息在同一个线程上继续'
+      : stageStatus === 'awaiting-user'
+        ? '输入回答，Enter 发送'
+        : '可以继续追问，线程会再执行一个回合'
 
   return (
     <Modal
@@ -195,6 +200,18 @@ export default function ThreadModal({ open, thread, onClose, onSendAnswer, onRef
                 <Icon name="refresh" />
                 刷新
               </button>
+              {executing && onPauseThread && (
+                <button className="btn" onClick={() => !busy && onPauseThread()}>
+                  <Icon name="pause" />
+                  暂停
+                </button>
+              )}
+              {paused && onResumeThread && (
+                <button className="btn btn-primary" onClick={() => !busy && onResumeThread()}>
+                  <Icon name="play" />
+                  继续执行
+                </button>
+              )}
               {stageStatus === 'awaiting-user' && interactive && (
                 <button className="btn" onClick={() => !busy && onSendAnswer('done', 'end-interactive')}>
                   <Icon name="check" />
@@ -205,8 +222,8 @@ export default function ThreadModal({ open, thread, onClose, onSendAnswer, onRef
           </div>
         ) : (
           <div className="pending-q">
-            <strong>线程已结束（只读）</strong>
-            <div>该阶段的线程已经关闭；如需要它继续工作，请使用阶段操作里的「重跑 / 重试」创建新线程。</div>
+            <strong>线程不可交互（只读）</strong>
+            <div>该阶段的线程尚未创建或已过期；如需要它工作，请使用阶段操作里的「重跑 / 重试」创建新线程。</div>
           </div>
         )}
       </div>

@@ -80,6 +80,7 @@ export const ST_META = {
   running: ['进行中', 'running'],
   'awaiting-user': ['等待你回答', 'review'],
   'awaiting-confirmation': ['等待确认', 'review'],
+  paused: ['已暂停', 'review'],
   completed: ['已完成', 'completed'],
   skipped: ['已跳过', 'pending'],
   cancelled: ['已取消', 'blocked'],

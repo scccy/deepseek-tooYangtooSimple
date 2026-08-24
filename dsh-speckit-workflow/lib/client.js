@@ -61,6 +61,7 @@ window.__ModuleLoader__.load({
       running: ['进行中', 'running'],
       'awaiting-user': ['等待你回答', 'review'],
       'awaiting-confirmation': ['等待确认', 'review'],
+      paused: ['已暂停', 'review'],
       completed: ['已完成', 'completed'],
       skipped: ['已跳过', 'pending'],
       cancelled: ['已取消', 'blocked'],
@@ -156,6 +157,7 @@ window.__ModuleLoader__.load({
       archive: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v11h14V9"/><path d="M10 13h4"/>',
       bookmark: '<path d="M6 3h12v18l-6-4-6 4z"/>',
       play: '<path d="M7 4v16l13-8z"/>',
+      pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
       bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.8.7 1 1.5 1 2.5h6c0-1 .2-1.8 1-2.5A6 6 0 0 0 12 3z"/>',
       refresh: '<path d="M20 11a8 8 0 1 0-2.3 6.2"/><path d="M20 4v7h-7"/>',
       link: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19"/>'
@@ -379,8 +381,14 @@ window.__ModuleLoader__.load({
           <div class="modal-head"><strong id="thTitle">阶段线程</strong><button class="modal-close" data-close="threadModal"><i data-i="x"></i></button></div>
           <div class="modal-body">
             <div id="thBody"></div>
-            <div class="chat-input"><input id="thAnswer" placeholder="输入回答…（Enter 发送；交互阶段人工回答）"><button class="btn btn-primary" data-act="thread-send"><i data-i="send"></i>发送</button></div>
-            <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" data-act="thread-refresh"><i data-i="refresh"></i>刷新</button><button class="btn" data-act="thread-end"><i data-i="check"></i>结束交互</button></div>
+            <div class="composer-hint" id="thHint"></div>
+            <div class="chat-input" id="thComposer"><input id="thAnswer" placeholder="给线程发消息…（Enter 发送）"><button class="btn btn-primary" data-act="thread-send"><i data-i="send"></i>发送</button></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px" id="thActions">
+              <button class="btn" data-act="thread-refresh"><i data-i="refresh"></i>刷新</button>
+              <button class="btn" data-act="thread-pause" id="thPause" style="display:none"><i data-i="pause"></i>暂停</button>
+              <button class="btn btn-primary" data-act="thread-resume" id="thResume" style="display:none"><i data-i="play"></i>继续执行</button>
+              <button class="btn" data-act="thread-end" id="thEnd" style="display:none"><i data-i="check"></i>结束交互</button>
+            </div>
           </div>
         </div>
       `
@@ -604,7 +612,7 @@ window.__ModuleLoader__.load({
       const tiles = STAGES.map((id) => {
         const row = last[id]
         const status = row ? row.status : 'not-started'
-        const cls = status === 'completed' || status === 'skipped' ? 'done' : status === 'running' || status === 'awaiting-user' || status === 'creating' ? 'cur' : status === 'failed' ? 'warn' : status === 'stale' ? 'loop' : ''
+        const cls = status === 'completed' || status === 'skipped' ? 'done' : status === 'running' || status === 'awaiting-user' || status === 'awaiting-confirmation' || status === 'creating' || status === 'paused' ? 'cur' : status === 'failed' ? 'warn' : status === 'stale' ? 'loop' : ''
         return `<div class="jstep ${cls}"><strong>${STAGE_TITLES[id]}</strong><span>${row ? `${row.attempt}·${status}` : '—'}</span></div>`
       }).join('')
       return `<div class="journey">${tiles}</div>`
@@ -620,7 +628,7 @@ window.__ModuleLoader__.load({
       const threadAction = (stage.actions || []).find((a) => a.id === 'thread')
       const actions = (stage.actions || []).filter((a) => a.id !== 'thread').map(defAction).join('')
       // 线程入口单独渲染为幽灵样式（ph-open），进行中阶段描边强调，避免与普通动作按钮混排
-      const isLive = ['running', 'awaiting-user', 'awaiting-confirmation', 'creating'].includes(stage.status)
+      const isLive = ['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused'].includes(stage.status)
       const openBtn = threadAction
         ? `<button class="ph-open${isLive ? ' live' : ''}" data-stage-act="thread" data-stage-row="${stage.id}" data-stage-id="${stage.stageId}">${icon('message', 12)}${esc(threadAction.label)}${icon('chevron', 11)}</button>`
         : ''
@@ -663,7 +671,7 @@ window.__ModuleLoader__.load({
         `<span>${instance.mode === 'isolated' ? 'worktree · ' + esc(instance.worktreePath || '') : 'inplace'}</span>`
       ].filter(Boolean).join('')
       const body = els.dBody
-      const active = detail.stages.find((stage) => ['running', 'awaiting-user', 'awaiting-confirmation', 'creating'].includes(stage.status))
+      const active = detail.stages.find((stage) => ['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused'].includes(stage.status))
       body.innerHTML = `
         <div class="sec-label">${icon('kanban')}阶段旅程</div>
         ${journeyHtml(detail)}
@@ -679,8 +687,16 @@ window.__ModuleLoader__.load({
     }
 
     function interactiveBroker(active) {
-      if (!active || !['awaiting-user', 'running'].includes(active.status)) return ''
+      if (!active || !['awaiting-user', 'running', 'paused'].includes(active.status)) return ''
       if (active.status === 'running') return ''
+      if (active.status === 'paused') {
+        return `
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button class="btn btn-primary" data-stage-act="resume" data-stage-row="${active.id}" data-stage-id="${active.stageId}">${icon('play')}继续执行</button>
+            ${active.threadId ? `<button class="btn" data-stage-act="thread" data-stage-row="${active.id}" data-stage-id="${active.stageId}">${icon('message')}继续对话</button>` : ''}
+          </div>
+        `
+      }
       if (active.stageId !== 'clarify' && active.stageId !== 'converge') return ''
       return `
         <div class="chat-input" style="margin-top:4px">
@@ -695,6 +711,9 @@ window.__ModuleLoader__.load({
       const buttons = []
       if (active && active.status === 'awaiting-user') {
         buttons.push(`<button class="btn" data-stage-act="end-interactive" data-stage-row="${active.id}">${icon('check')}结束交互</button>`)
+      } else if (active && active.status === 'paused') {
+        buttons.push(`<button class="btn btn-primary" data-stage-act="resume" data-stage-row="${active.id}" data-stage-id="${active.stageId}">${icon('play')}继续执行</button>`)
+        if (active.threadId) buttons.push(`<button class="btn" data-stage-act="thread" data-stage-row="${active.id}" data-stage-id="${active.stageId}">${icon('message')}继续对话</button>`)
       } else if (active && active.status === 'awaiting-confirmation') {
         const confirm = (active.actions || []).find((a) => a.id === 'confirm')
         if (confirm) buttons.push(`<button class="btn btn-primary" data-stage-act="confirm" data-stage-row="${active.id}" data-stage-id="${active.stageId}">${icon('check')}${esc(confirm.label)}</button>`)
@@ -799,30 +818,91 @@ window.__ModuleLoader__.load({
       S.detail = null
     }
 
-    async function openThread(stageRow, stageId) {
+    async function openThread(stageRow, stageId, { autofocus = true } = {}) {
       const instanceId = S.detailInstanceId
       if (!instanceId) return
       try {
         const value = await callHost('thread-view', { instanceId, stageRowId: stageRow })
         S.thread = value
         els.thTitle.textContent = `线程 · ${STAGE_TITLES[stageId] || stageId}#${value.stageRow.attempt}`
-        els.thBody.innerHTML = `
-          ${(value.messages || []).map(messageHtml).join('') || '<div class="empty">线程暂无消息</div>'}
-          ${value.state && value.state.status === 'asking' ? `<div class="pending-q" style="margin-top:8px"><strong>待你回答</strong><div>${esc(value.state.question)}</div></div>` : ''}
-          ${value.state && Array.isArray(value.state.findings) && value.state.findings.length ? `<div class="pending-q" style="margin-top:8px"><strong>待你决策</strong><div>${value.state.findings.length} 个发现</div></div>` : ''}
-        `
+        renderThreadBody()
         els.threadModal.classList.add('open')
         const input = els.thAnswer
         input.dataset.stageRow = String(stageRow)
         input.dataset.stageId = stageId
-        input.focus()
+        renderThreadComposer()
+        if (autofocus) input.focus()
       } catch (error) {
         toast(error.message)
       }
     }
+    function renderThreadBody() {
+      const tr = S.thread
+      if (!tr) return
+      const messages = Array.isArray(tr.messages) ? tr.messages : []
+      const stageRow = tr.stageRow
+      els.thBody.innerHTML = `
+        ${messages.map(messageHtml).join('') || '<div class="empty">线程暂无消息</div>'}
+        ${tr.state && tr.state.status === 'asking' ? `<div class="pending-q" style="margin-top:8px"><strong>待你回答</strong><div>${esc(tr.state.question)}</div></div>` : ''}
+        ${tr.state && Array.isArray(tr.state.findings) && tr.state.findings.length ? `<div class="pending-q" style="margin-top:8px"><strong>待你决策</strong><div>${tr.state.findings.length} 个发现</div></div>` : ''}
+        ${stageRow && stageRow.error ? `<div class="pending-q" style="margin-top:8px;border-color:#6e3a3a;background:rgba(239,125,125,.07);color:#f3a9a9"><strong>失败原因</strong><div>${esc(stageRow.error)}</div></div>` : ''}
+      `
+    }
     function closeThread() {
       els.threadModal.classList.remove('open')
       S.thread = null
+    }
+
+    // Thread modal composer: show 发送/暂停/继续执行/结束交互 only when the
+    // current stage status actually supports them (mirrors lib/index.js
+    // THREAD_ACCEPT_STATUSES + await-user interactive protocol).
+    const THREAD_ACCEPT_STATUSES = new Set(['running', 'awaiting-user', 'awaiting-confirmation', 'paused', 'completed', 'failed', 'cancelled'])
+    function renderThreadComposer() {
+      const stageRow = S.thread && S.thread.stageRow ? S.thread.stageRow : null
+      const status = stageRow ? stageRow.status : null
+      const stageKey = stageRow ? (stageRow.stageId || stageRow.stage_id) : null
+      const continuable = THREAD_ACCEPT_STATUSES.has(status)
+      const interactive = stageRow && (stageKey === 'clarify' || stageKey === 'converge')
+      els.thComposer.style.display = continuable ? '' : 'none'
+      els.thPause.style.display = status === 'running' ? '' : 'none'
+      els.thResume.style.display = status === 'paused' ? '' : 'none'
+      els.thEnd.style.display = (status === 'awaiting-user' && interactive) ? '' : 'none'
+      els.thAnswer.placeholder = status === 'awaiting-user' ? '输入回答…' : '给线程发消息…'
+      els.thHint.textContent = status === 'running'
+        ? '线程正在执行，可随时「暂停」；回复会自动接续到线程'
+        : status === 'paused'
+          ? '线程已暂停：可「继续执行」恢复本次执行，或直接发消息在同一个线程上继续'
+          : status === 'awaiting-user'
+            ? '输入回答，Enter 发送（多轮交互）'
+            : continuable
+              ? '线程已结束：可继续追问，线程会在同一个线程上再执行一个回合'
+              : '该阶段线程不可交互（请使用阶段操作里的重跑/重试）'
+    }
+
+    async function pauseThread(stageRow) {
+      const instanceId = S.detailInstanceId
+      if (!instanceId || Number.isNaN(Number(stageRow))) return
+      try {
+        await callHost('thread-pause', { instanceId, stageRowId: Number(stageRow), actionId: newActionId() })
+        toast('已暂停线程（可继续执行或继续对话）')
+        await Promise.all([refreshDetail(), refreshBoard()])
+        await openThread(Number(stageRow), els.thAnswer.dataset.stageId, { autofocus: false })
+      } catch (error) {
+        toast(error.message)
+      }
+    }
+
+    async function resumeThread(stageRow) {
+      const instanceId = S.detailInstanceId
+      if (!instanceId || Number.isNaN(Number(stageRow))) return
+      try {
+        await callHost('thread-resume', { instanceId, stageRowId: Number(stageRow), actionId: newActionId() })
+        toast('已继续执行（同一线程恢复）')
+        await Promise.all([refreshDetail(), refreshBoard()])
+        await openThread(Number(stageRow), els.thAnswer.dataset.stageId, { autofocus: false })
+      } catch (error) {
+        toast(error.message)
+      }
     }
 
     // ------------------------------------------------------------- actions
@@ -886,7 +966,7 @@ window.__ModuleLoader__.load({
             const input = els.dBody ? els.dBody.querySelector('#drawerAnswer') : null
             const text = input ? input.value.trim() : ''
             if (!text) return
-            await sendAnswer(Number(input.dataset.stageRow), text, 'answer')
+            await sendAnswer(Number(input.dataset.stageRow), text, 'answer', 'awaiting-user')
             input.value = ''
             return
           }
@@ -899,7 +979,17 @@ window.__ModuleLoader__.load({
           }
           if (act === 'thread-refresh') {
             const row = els.thAnswer ? Number(els.thAnswer.dataset.stageRow) : null
-            if (row != null && !Number.isNaN(row)) await openThread(row, els.thAnswer.dataset.stageId)
+            if (row != null && !Number.isNaN(row)) await openThread(row, els.thAnswer.dataset.stageId, { autofocus: false })
+            return
+          }
+          if (act === 'thread-pause') {
+            const row = els.thAnswer ? Number(els.thAnswer.dataset.stageRow) : null
+            if (row != null && !Number.isNaN(row)) await pauseThread(row)
+            return
+          }
+          if (act === 'thread-resume') {
+            const row = els.thAnswer ? Number(els.thAnswer.dataset.stageRow) : null
+            if (row != null && !Number.isNaN(row)) await resumeThread(row)
             return
           }
           if (act === 'thread-end') {
@@ -1145,11 +1235,22 @@ window.__ModuleLoader__.load({
             toast('已重跑')
             break
           }
+          case 'cancel-current':
           case 'cancel': {
             const ok = await askConfirm('取消阶段', '将取消当前阶段并释放工作区锁。确定取消？', { danger: true, confirmLabel: '确认取消' })
             if (!ok) return
             await callHost('stage-cancel', { instanceId, stageRowId: stageRow, actionId })
             toast('已取消')
+            break
+          }
+          case 'pause': {
+            await callHost('thread-pause', { instanceId, stageRowId: stageRow, actionId })
+            toast('已暂停线程（可继续执行或继续对话）')
+            break
+          }
+          case 'resume': {
+            await callHost('thread-resume', { instanceId, stageRowId: stageRow, actionId })
+            toast('已继续执行（同一线程恢复）')
             break
           }
           case 'answer':
@@ -1226,15 +1327,35 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function sendAnswer(stageRow, text, kind) {
+    async function sendAnswer(stageRow, text, kind, fromStatus) {
       const instanceId = S.detailInstanceId
       if (!instanceId || Number.isNaN(stageRow)) return
       const actionId = newActionId()
+      const stage = S.thread && S.thread.stageRow ? S.thread.stageRow : null
+      const status = fromStatus || (stage ? stage.status : null)
       try {
-        await callHost('stage-answer', { instanceId, stageRowId: stageRow, actionId, text, kind })
-        toast('已发送到线程')
-        closeThread()
-        await refreshDetail()
+        if (kind === 'end-interactive' || status === 'awaiting-user') {
+          // 交互阶段（clarify/converge 的 awaiting-user）仍走 stage-answer 问答协议。
+          await callHost('stage-answer', { instanceId, stageRowId: stageRow, actionId, text, kind: kind || 'answer' })
+          toast('已发送到线程')
+          await refreshDetail()
+          if (els.threadModal && els.threadModal.classList.contains('open')) {
+            await openThread(stageRow, stage ? stage.stageId : els.thAnswer.dataset.stageId, { autofocus: false })
+          }
+        } else {
+          // 其余可交互状态（running / awaiting-confirmation / paused / 终态当前阶段）
+          // 走 thread-message：消息投递进同一线程，线程再执行一个回合。
+          await callHost('thread-message', { instanceId, stageRowId: stageRow, threadId: S.thread ? S.thread.threadId : null, text })
+          toast('已发送到线程')
+          if (text && S.thread) {
+            S.thread.messages = [...(S.thread.messages || []), { who: 'user', text, at: Date.now() }]
+            renderThreadBody()
+          }
+          await refreshDetail()
+          if (els.threadModal && els.threadModal.classList.contains('open')) {
+            await openThread(stageRow, stage ? stage.stageId : els.thAnswer.dataset.stageId, { autofocus: false })
+          }
+        }
       } catch (error) {
         toast(error.message)
       }
@@ -1321,6 +1442,11 @@ window.__ModuleLoader__.load({
         threadModal: shadow.getElementById('threadModal'),
         thTitle: shadow.getElementById('thTitle'),
         thBody: shadow.getElementById('thBody'),
+        thHint: shadow.getElementById('thHint'),
+        thComposer: shadow.getElementById('thComposer'),
+        thPause: shadow.getElementById('thPause'),
+        thResume: shadow.getElementById('thResume'),
+        thEnd: shadow.getElementById('thEnd'),
         thAnswer: shadow.getElementById('thAnswer'),
         dialogBackdrop: shadow.getElementById('dialogBackdrop'),
         dlgTitle: shadow.getElementById('dlgTitle'),
@@ -1353,11 +1479,20 @@ window.__ModuleLoader__.load({
       S.timer2 = window.setInterval(() => {
         if (S.sessionId) void refreshBoard()
       }, POLL_MS * 2)
+      // 线程弹窗打开期间轮询刷新：让「执行中/已暂停」状态与消息流保持最新，
+      // 这样用户能在 AI 持续输出时看到并点击「暂停」，暂停后也能立即「继续执行」。
+      S.threadTimer = window.setInterval(() => {
+        if (!S.thread || !els.threadModal || !els.threadModal.classList.contains('open')) return
+        const row = els.thAnswer ? Number(els.thAnswer.dataset.stageRow) : null
+        if (row == null || Number.isNaN(row)) return
+        void openThread(row, els.thAnswer.dataset.stageId, { autofocus: false })
+      }, 1600)
 
       if (els.topCwd) els.topCwd.textContent = S.board && S.board.cwd ? S.board.cwd : '…'
       return () => {
         window.clearInterval(S.pollTimer)
         window.clearInterval(S.timer2)
+        window.clearInterval(S.threadTimer)
         window.clearTimeout(S.toastTimer)
         window.removeEventListener('error', onWinError)
         if (typeof disposeEvents === 'function') disposeEvents()

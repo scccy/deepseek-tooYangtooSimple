@@ -450,6 +450,67 @@ export class Orchestrator {
     })
   }
 
+  // ------------------------------------------------------------ 暂停/继续
+
+  /**
+   * Pause a running stage thread (user "暂停", or restart recovery when a
+   * mid-turn thread was orphaned by a process death). The thread is
+   * interrupted by the caller AFTER this transaction commits, so the idle
+   * edge never mistakes an interrupted turn for a protocol failure. The
+   * workspace lock stays held: the stage is only held, not cancelled.
+   * Resuming delivers a followup on the SAME thread, so no work is lost.
+   */
+  pauseStage(instanceId, stageRowId, { actionId, reason } = {}) {
+    const now = this.now()
+    return this.ledger.transaction((tx) => {
+      const action = this.ledger.claimAction(tx, actionId, instanceId)
+      if (!action.fresh) return { idempotent: true, result: action.result }
+      const stage = this.ledger.getStage(tx, stageRowId)
+      if (!stage || stage.instance_id !== instanceId) throw new OrchestratorError('not-found', 'stage not found')
+      if (stage.status !== 'running') {
+        throw new OrchestratorError('invalid-state', `阶段状态 ${stage.status} 不能暂停（仅运行中的阶段可暂停）`)
+      }
+      stage.status = 'paused'
+      this.ledger.updateStage(tx, stage)
+      this.ledger.insertDecision(tx, {
+        instance_id: instanceId, stage_row: stageRowId, kind: 'pause',
+        target_stage: stage.stage_id, note: reason || '用户暂停线程', at: now
+      })
+      this.ledger.appendEvents(tx, [this.event(instanceId, 'stage-paused', { stageId: stage.stage_id, attempt: stage.attempt }, stage.thread_id)])
+      const result = { stageRowId, threadId: stage.thread_id, status: 'paused' }
+      this.ledger.completeAction(tx, actionId, result)
+      return { idempotent: false, result }
+    })
+  }
+
+  /**
+   * Resume a paused stage: mark it running again (the caller delivers a
+   * followup to the same thread, which wakes it and lets it finish its turn).
+   */
+  resumeStage(instanceId, stageRowId, { actionId, reason } = {}) {
+    const now = this.now()
+    return this.ledger.transaction((tx) => {
+      const action = this.ledger.claimAction(tx, actionId, instanceId)
+      if (!action.fresh) return { idempotent: true, result: action.result }
+      const stage = this.ledger.getStage(tx, stageRowId)
+      if (!stage || stage.instance_id !== instanceId) throw new OrchestratorError('not-found', 'stage not found')
+      if (stage.status !== 'paused') {
+        throw new OrchestratorError('invalid-state', `阶段状态 ${stage.status} 不能恢复（仅已暂停的阶段可恢复）`)
+      }
+      stage.status = 'running'
+      stage.ended_at = null
+      this.ledger.updateStage(tx, stage)
+      this.ledger.insertDecision(tx, {
+        instance_id: instanceId, stage_row: stageRowId, kind: 'resume',
+        target_stage: stage.stage_id, note: reason || '用户继续执行线程', at: now
+      })
+      this.ledger.appendEvents(tx, [this.event(instanceId, 'stage-resumed', { stageId: stage.stage_id, attempt: stage.attempt }, stage.thread_id)])
+      const result = { stageRowId, threadId: stage.thread_id, status: 'running' }
+      this.ledger.completeAction(tx, actionId, result)
+      return { idempotent: false, result }
+    })
+  }
+
   // ------------------------------------------------------------ 取消
 
   /**
@@ -512,7 +573,7 @@ export class Orchestrator {
       return instances.map((instance) => {
         const stages = this.ledger.listStages(tx, instance.instance_id)
         const active = stages
-          .filter((stage) => stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'awaiting-confirmation' || stage.status === 'creating')
+          .filter((stage) => stage.status === 'running' || stage.status === 'awaiting-user' || stage.status === 'awaiting-confirmation' || stage.status === 'creating' || stage.status === 'paused')
           .sort((a, b) => b.attempt - a.attempt)[0]
         return {
           instanceId: instance.instance_id,
@@ -553,7 +614,7 @@ export class Orchestrator {
       if (!instance) throw new OrchestratorError('not-found', 'instance not found')
       const stages = this.ledger.listStages(tx, instanceId)
       const active = stages
-        .filter((stage) => ['running', 'awaiting-user', 'awaiting-confirmation', 'creating'].includes(stage.status))
+        .filter((stage) => ['running', 'awaiting-user', 'awaiting-confirmation', 'creating', 'paused'].includes(stage.status))
         .sort((a, b) => b.attempt - a.attempt)[0]
       if (active && !TERMINAL_STATUSES.has(active.status)) {
         active.status = 'cancelled'
