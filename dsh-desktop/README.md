@@ -77,7 +77,7 @@ scripts/         打包脚本（macOS dmg / Windows NSIS / debug .app）
 | 平台 | 命令 | 产物 |
 |---|---|---|
 | macOS | `scripts/package-macos.sh` | `.dmg` + release `.app` |
-| Windows | `scripts/package-windows.ps1`（Windows 机器 / CI） | NSIS 安装器 + portable `.exe` |
+| Windows | `scripts/package-windows.ps1`（Windows 机器 / CI） | NSIS 安装器 `.exe` |
 | Linux | `cargo build --release` + 手动打包 | 未接入 deb/AppImage（待补） |
 
 **发布流程：本机只出 macOS 产物。** Windows `.exe` 需要在 Windows 机器或 GitHub
