@@ -16,7 +16,7 @@
 | **SDD 工具链** | [`spec-kit`](spec-kit/README.md)（vendored GitHub 官方工具包）、`.agents/skills` 下的 13 个 `speckit-*` 技能、仓库级 `.specify` 骨架 |
 | **示例 / 测试** | `specs/`（示例 Feature）、`speckit-scratch-v08/`（冒烟测试项目） |
 | **开发技能** | `cordis-plugin-development/`（Dynamic Cordis 插件开发 SKILL） |
-| **CI** | `.github/workflows/build-desktop.yml`（推送 main 自动打三平台包） |
+| **CI** | `.github/workflows/build-desktop.yml`（打 v* tag 自动构建三平台并发布 Release） |
 
 > 非官方：本仓库封装/定制的是开源发行版 DSH；插件延用各自上游协议，桌面版与 DeepSeek 无隶属或背书关系。
 
@@ -124,7 +124,7 @@ specify init --here --script py
 
 ## CI / CD
 
-`.github/workflows/build-desktop.yml`：推送 `main`（修改 `dsh-desktop/**` 或 workflow 本身时）自动触发：
+`.github/workflows/build-desktop.yml`：打 `v*` tag 自动触发（构建三平台并发布 Release）；手动 `workflow_dispatch` 可随时验证构建：
 
 - **macOS**：`macos-14`（aarch64，Apple Silicon）+ `macos-13`（x86_64，Intel）各打 `.app` + `.dmg`
 - **Windows**：`windows-latest`（x64）打 NSIS `.exe`
