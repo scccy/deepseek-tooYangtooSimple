@@ -300,6 +300,11 @@ fn check_node_version(node: &Path) -> Result<(), String> {
 /// The portless host sidecar script. Debug builds prefer the live repository
 /// copy (editing sidecar.mjs only requires an app relaunch); release builds
 /// use the bundle resource, falling back to the repo layout.
+///
+/// Windows 上的已知坑：`resource_dir()` 返回 exe 所在目录（Tauri 把
+/// `bundle.resources` 直接放进 exe 目录），且存在 `resources/` 层级变体；
+/// 某些安装形态下路径解析可能把盘符根（如 `C:`）当成目录——这里逐一探测
+/// 候选并拒绝"没有文件名"的坏路径，并把每个候选写进 dsh-desktop.log。
 pub fn resolve_host_script(app: &tauri::AppHandle) -> Option<PathBuf> {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -312,20 +317,39 @@ pub fn resolve_host_script(app: &tauri::AppHandle) -> Option<PathBuf> {
             return Some(repo);
         }
     }
-    for candidate in [
-        app.path()
-            .resource_dir()
-            .ok()
-            .map(|dir| dir.join("host").join("sidecar.mjs")),
-        Some(repo),
-    ] {
-        if let Some(path) = candidate {
-            if path.is_file() {
-                return Some(path);
-            }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        // macOS: Contents/Resources；Windows: exe 目录。两种布局都探测。
+        candidates.push(dir.join("host").join("sidecar.mjs"));
+        candidates.push(dir.join("resources").join("host").join("sidecar.mjs"));
+    }
+    candidates.push(repo);
+
+    for path in &candidates {
+        trace_host_script(app, path);
+        // 防御：`C:` 这类没有文件名的路径不能被当成脚本喂给 node（会
+        // lstat('C:') 直接崩）——宁可报错也不要裸崩。
+        if path.file_name().is_some() && path.is_file() {
+            return Some(path.clone());
         }
     }
     None
+}
+
+/// 把每个脚本候选与解析结果写进 dsh-desktop.log，便于在 Windows 端定位
+/// "sidecar 路径被算成 C:" 的真实来源。
+fn trace_host_script(app: &tauri::AppHandle, path: &Path) {
+    if let Ok(dir) = app.path().app_log_dir() {
+        crate::bridge::append_log(
+            &dir.join("dsh-desktop.log"),
+            format!(
+                "dsh-desktop: host script candidate: {} (is_file={}, file_name={:?})",
+                path.display(),
+                path.is_file(),
+                path.file_name().map(|n| n.to_string_lossy().into_owned())
+            ),
+        );
+    }
 }
 
 pub fn resolve_home() -> PathBuf {
@@ -354,8 +378,17 @@ pub fn spawn_sidecar(app: &tauri::AppHandle, www_dir: &Path) -> Result<SpawnedHo
     let dsh_root = resolve_dsh_root().ok_or_else(|| {
         "找不到全局安装的 @deepseek-ai/dsh，请先运行 npm i -g @deepseek-ai/dsh".to_string()
     })?;
-    let script = resolve_host_script(app)
-        .ok_or_else(|| "找不到 host/sidecar.mjs（未随包分发且仓库布局缺失）".to_string())?;
+    let script = resolve_host_script(app).ok_or_else(|| {
+        "找不到 host/sidecar.mjs（未随包分发且仓库布局缺失）".to_string()
+    })?;
+    // 二次防御：脚本必须存在且是带文件名的常规文件，否则给出可读错误
+    // 而不是把坏路径（如 Windows 盘符根 `C:`）传给 node 崩掉。
+    if script.file_name().is_none() || !script.is_file() {
+        return Err(format!(
+            "host/sidecar.mjs 无效（{}），请重新安装桌面版",
+            script.display()
+        ));
+    }
     let home = resolve_home();
     let cwd = crate::envs::var("DSH_DESKTOP_CWD", "DSH_MAC_CWD")
         .filter(|v| !v.trim().is_empty())

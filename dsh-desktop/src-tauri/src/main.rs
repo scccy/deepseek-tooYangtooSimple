@@ -491,7 +491,7 @@ fn run_hot_restart(app: tauri::AppHandle) {
         &log_path
             .clone()
             .unwrap_or_else(|| www_dir.join("dsh-desktop.log")),
-        "mac-shell host hot restart requested".to_string(),
+        "dsh-desktop host hot restart requested".to_string(),
     );
     eprintln!(
         "dsh-desktop: hot restart initiated (www={})",
@@ -536,7 +536,7 @@ fn log_preamble(app: &tauri::AppHandle, www_dir: &PathBuf, home: &PathBuf) {
     bridge::append_log(
         &log,
         format!(
-            "mac-shell starting (www={}, dsh-home={}, pid={})",
+            "dsh-desktop starting (www={}, dsh-home={}, pid={})",
             www_dir.display(),
             home.display(),
             std::process::id()
