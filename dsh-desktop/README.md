@@ -78,12 +78,12 @@ scripts/         打包脚本（macOS dmg / Windows NSIS / debug .app）
 |---|---|---|
 | macOS | `scripts/package-macos.sh` | `.dmg` + release `.app`（aarch64 / x86_64 双架构） |
 | Windows | `scripts/package-windows.ps1`（Windows 机器 / CI） | NSIS 安装器 `.exe` |
-| Linux | CI `cargo build --release`（x86_64 / aarch64） | 单二进制（deb/AppImage 待补） |
+| Linux | CI `tauri build`（x86_64 / aarch64） | `.deb` + `.AppImage` + `.tar.gz` |
 
 **发布流程：本机只出 macOS 产物（Apple Silicon 出 aarch64；Intel 需在 CI 的
 arm64 runner 上交叉编译出 x86_64）。** Windows `.exe` 需要在 Windows 机器或 GitHub
 Actions（`.github/workflows/build-desktop.yml`）上执行，不能在 macOS 上交叉出
-NSIS 安装器。Linux 的 deb/AppImage 打包尚未接入，需在 Linux 环境补齐。
+NSIS 安装器。Linux 的 deb/AppImage/tar.gz 打包由 CI（`tauri build`）完成。
 
 签名：`package-macos.sh` 默认 ad-hoc 签名（适合本机/内部分发）；正式发布前设置
 `APPLE_SIGNING_IDENTITY="Developer ID Application: ..."` 并走 notarytool 公证

@@ -18,6 +18,7 @@
     "targets": ["app", "dmg"],
     "category": "DeveloperTool",
     "shortDescription": "DeepSeek Harness desktop shell",
+    "publisher": "scccy <shici2880@gmail.com>",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -30,6 +31,11 @@
       "../host/sidecar.mjs": "host/sidecar.mjs",
       "../host/ws-ipc.mjs": "host/ws-ipc.mjs",
       "../host/desktop-pnpm.mjs": "host/desktop-pnpm.mjs"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libappindicator3-1"]
+      }
     },
     "macOS": {
       "minimumSystemVersion": "11.0",

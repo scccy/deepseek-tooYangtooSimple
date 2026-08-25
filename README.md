@@ -128,7 +128,7 @@ specify init --here --script py
 
 - **macOS**：`macos-14`（arm64）原生出 aarch64，并交叉编译 `x86_64-apple-darwin` 出 Intel 包，各打 `.app` + `.dmg`
 - **Windows**：`windows-latest`（x64）打 NSIS `.exe`
-- **Linux**：`ubuntu-latest`（x86_64）+ `ubuntu-24.04-arm`（aarch64）各编译单个 `dsh-desktop` 二进制
+- **Linux**：`ubuntu-latest`（x86_64）+ `ubuntu-24.04-arm`（aarch64）各打 `.deb` + `.AppImage` + `.tar.gz`
 
 产物作为 artifacts 上传，文件名统一为 `dsh-desktop-v<版本>-<平台>-<架构>`（例如 `dsh-desktop-v0.6.5-macos-aarch64.dmg`、`dsh-desktop-v0.6.5-windows-x86_64.exe`、`dsh-desktop-v0.6.5-linux-x86_64`）。
 

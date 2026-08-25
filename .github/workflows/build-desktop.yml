@@ -93,26 +93,41 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Install WebKitGTK and Tauri Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: Build
-        working-directory: dsh-desktop/src-tauri
-        run: cargo build --release
+      - name: Tauri build (deb + appimage)
+        working-directory: dsh-desktop
+        run: |
+          npm install
+          npx tauri build --bundles deb,appimage
 
-      - name: Name binary (unified name)
-        working-directory: dsh-desktop/src-tauri
+      - name: Package tar.gz and unify names
+        shell: bash
         run: |
           V="${GITHUB_REF_NAME#v}"
-          cp target/release/dsh-desktop "dsh-desktop-v${V}-linux-${{ matrix.arch }}"
+          A="${{ matrix.arch }}"
+          PKG="dsh-desktop-v${V}-linux-${A}"
+          OUT="$GITHUB_WORKSPACE/linux-dist"
+          mkdir -p "$OUT"
 
-      - name: Upload Linux binary
+          tar -czf "$OUT/${PKG}.tar.gz" -C dsh-desktop/src-tauri/target/release dsh-desktop
+          cp dsh-desktop/src-tauri/target/release/bundle/deb/*.deb "$OUT/${PKG}.deb"
+          find dsh-desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -exec cp {} "$OUT/${PKG}.AppImage" \;
+
+          ls -la "$OUT"
+
+      - name: Upload Linux bundles
         uses: actions/upload-artifact@v4
         with:
           name: DeepSeek-Harness-Desktop-Linux-${{ matrix.arch }}
-          path: dsh-desktop/src-tauri/dsh-desktop-v*-linux-${{ matrix.arch }}
+          path: linux-dist/*
           if-no-files-found: error
 
   release:
@@ -135,7 +150,9 @@ jobs:
           files: |
             dist/**/*.dmg
             dist/**/*.exe
-            dist/**/dsh-desktop-*
+            dist/**/*.deb
+            dist/**/*.AppImage
+            dist/**/*.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
