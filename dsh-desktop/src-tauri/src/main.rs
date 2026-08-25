@@ -342,16 +342,54 @@ pub(crate) fn wait_for_bridge(bridge: &Arc<Bridge>, timeout: Duration) -> (bool,
     }
 }
 
+/// Unix-millisecond clock for cache-busting navigations.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Navigate the existing main window to the real site on success, or to the
 /// splash failure page. The window itself is never closed or recreated.
-fn navigate_to_result(app: &tauri::AppHandle, phase: &str, ready: bool, error: Option<String>) {
+///
+/// `cache_bust` is used by the hot-restart path. During a hot restart the
+/// WebView deliberately never leaves `dsh://localhost/index.html`, so by the
+/// time the new host reports ready the page is already at the exact URL we
+/// would `navigate()` to. WKWebView treats a `loadRequest` to the URL already
+/// loaded as a same-document no-op — a plain `navigate()` therefore silently
+/// fails to reload, and the OLD client (plus its in-memory state: stale
+/// dashboard, items that were deleted on disk) survives. Appending a
+/// cache-busting query makes the destination URL different, which forces a
+/// genuine new document load through the `dsh://` custom-protocol handler.
+fn navigate_to_result(
+    app: &tauri::AppHandle,
+    phase: &str,
+    ready: bool,
+    error: Option<String>,
+    cache_bust: bool,
+) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         return;
     };
     if ready {
         eprintln!("dsh-desktop: {phase}: host ready");
-        if let Ok(url) = INDEX_URL.parse::<tauri::Url>() {
-            let _ = window.navigate(url);
+        let dest = if cache_bust {
+            format!("{INDEX_URL}?dsh_restart={}", now_ms())
+        } else {
+            INDEX_URL.to_string()
+        };
+        match dest.parse::<tauri::Url>() {
+            Ok(url) => {
+                if let Err(error) = window.navigate(url) {
+                    eprintln!("dsh-desktop: {phase}: navigate failed ({error}); trying plain reload");
+                    let _ = window.reload();
+                }
+            }
+            Err(parse_error) => {
+                eprintln!("dsh-desktop: {phase}: invalid url ({parse_error}); trying plain reload");
+                let _ = window.reload();
+            }
         }
     } else {
         let message = error.unwrap_or_else(|| "unknown startup failure".to_string());
@@ -371,7 +409,7 @@ fn navigate_to_result(app: &tauri::AppHandle, phase: &str, ready: bool, error: O
 fn watch_startup(app: tauri::AppHandle, bridge: Arc<Bridge>) {
     std::thread::spawn(move || {
         let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
-        navigate_to_result(&app, "startup", ready, error);
+        navigate_to_result(&app, "startup", ready, error, false);
     });
 }
 
@@ -518,7 +556,7 @@ fn run_hot_restart(app: tauri::AppHandle) {
     }
 
     let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
-    navigate_to_result(&app, "hot restart", ready, error);
+    navigate_to_result(&app, "hot restart", ready, error, true);
     state.restarting.store(false, Ordering::SeqCst);
 }
 
