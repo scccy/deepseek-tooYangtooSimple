@@ -130,7 +130,7 @@ specify init --here --script py
 - **Windows**：`windows-latest`（x64）打 NSIS `.exe`
 - **Linux**：`ubuntu-latest`（x86_64）+ `ubuntu-24.04-arm`（aarch64）各编译单个 `dsh-desktop` 二进制
 
-产物作为 artifacts 上传，命名 `DeepSeek-Harness-Desktop-{macOS,Windows,Linux}-<arch>`。
+产物作为 artifacts 上传，文件名统一为 `dsh-desktop-v<版本>-<平台>-<架构>`（例如 `dsh-desktop-v0.6.5-macos-aarch64.dmg`、`dsh-desktop-v0.6.5-windows-x86_64.exe`、`dsh-desktop-v0.6.5-linux-x86_64`）。
 
 ## 许可
 

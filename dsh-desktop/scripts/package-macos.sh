@@ -26,13 +26,13 @@ else
 fi
 
 PRODUCT_NAME="DeepSeek Harness Desktop"
-VERSION="0.6.5"
+VERSION="${VERSION:-0.6.5}"
 IDENTIFIER="com.deepseek.harness.desktop"
 BUNDLE_ROOT="src-tauri/target/release/bundle/macos"
 APP_DIR="${BUNDLE_ROOT}/${PRODUCT_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 DMG_DIR="src-tauri/target/release/bundle/dmg"
-DMG_PATH="${DMG_DIR}/${PRODUCT_NAME}_${VERSION}_${ARCH}.dmg"
+DMG_PATH="${DMG_DIR}/dsh-desktop-v${VERSION}-macos-${ARCH}.dmg"
 
 rm -rf "$APP_DIR"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/host" "$DMG_DIR"

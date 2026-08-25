@@ -32,7 +32,9 @@ jobs:
 
       - name: Package macOS .app + .dmg
         shell: zsh {0}
-        run: TARGET="${{ matrix.target }}" TARGET_ARCH="${{ matrix.arch }}" zsh dsh-desktop/scripts/package-macos.sh
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="${{ matrix.target }}" TARGET_ARCH="${{ matrix.arch }}" VERSION="$VERSION" zsh dsh-desktop/scripts/package-macos.sh
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
@@ -61,6 +63,13 @@ jobs:
           cd dsh-desktop
           npm install
           npx tauri build --bundles nsis
+
+      - name: Rename installer (unified name)
+        shell: pwsh
+        run: |
+          $v = '${{ github.ref_name }}'.TrimStart('v','V')
+          Set-Location dsh-desktop/src-tauri/target/release/bundle/nsis
+          Get-ChildItem *.exe | Rename-Item -NewName "dsh-desktop-v${v}-windows-x86_64.exe"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
@@ -93,15 +102,17 @@ jobs:
         working-directory: dsh-desktop/src-tauri
         run: cargo build --release
 
-      - name: Name binary with arch
+      - name: Name binary (unified name)
         working-directory: dsh-desktop/src-tauri
-        run: cp target/release/dsh-desktop "dsh-desktop-${{ matrix.arch }}"
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          cp target/release/dsh-desktop "dsh-desktop-v${V}-linux-${{ matrix.arch }}"
 
       - name: Upload Linux binary
         uses: actions/upload-artifact@v4
         with:
           name: DeepSeek-Harness-Desktop-Linux-${{ matrix.arch }}
-          path: dsh-desktop/src-tauri/dsh-desktop-${{ matrix.arch }}
+          path: dsh-desktop/src-tauri/dsh-desktop-v*-linux-${{ matrix.arch }}
           if-no-files-found: error
 
   release:
