@@ -124,6 +124,11 @@ jobs:
         with:
           path: dist
 
+      - name: Delete existing release (idempotent)
+        run: gh release delete "$GITHUB_REF_NAME" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
