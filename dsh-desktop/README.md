@@ -97,6 +97,15 @@ NSIS 安装器。Linux 的 deb/AppImage/tar.gz 打包由 CI（`tauri build`）�
   Linux：`/usr/bin`、`/usr/local/bin`；Windows：`where node`）→ login-shell 探测
   （覆盖 nvm/fnm/volta；Windows 用 `cmd`）。桌面版与 CLI 共享同一个 node、
   同一份 dsh 包、同一个 DSH 数据目录——插件、会话、设置天然一致，无隔离副本。
+- **后台任务环境自动注入**：GUI 进程从 launchd 拿到的是出厂裸 PATH
+  （`/usr/bin:/bin:/usr/sbin:/sbin`），用户装在 shell 里的工具链
+  （cargo / conda / java / maven…）对后台任务不可见。host 启动时用
+  交互式登录 shell（`-lic`，连 `.zshrc` 一起 source）读一次用户真实环境，
+  把 `PATH` 及白名单变量（`JAVA_HOME` / `MAVEN_HOME` / `HTTP(S)_PROXY`）注入
+  sidecar，agent 会话与后台任务因此与终端看到同一套环境——用户零配置、
+  零 sudo，无需 `launchctl setenv`，也不改动用户的任何系统状态（含
+  `java_home` 注册；`$JAVA_HOME/bin` 已在注入的 PATH 中，`java` 直接可用，
+  `/usr/bin/java` stub 是否可用属于用户自己的系统 bin 配置）。
 
 ## 环境变量
 

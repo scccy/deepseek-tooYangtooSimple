@@ -1,0 +1,26 @@
+[package]
+name = "placegame-vip-client"
+version = "0.1.0"
+description = "PlaceGame VIP 收菜客户端 (macOS / Tauri v2 + Rust)"
+edition = "2021"
+
+[lib]
+name = "placegame_vip_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+url = "2"
+tokio = { version = "1", features = ["time", "sync", "macros", "rt-multi-thread"] }
+rand = "0.8"
+
+[profile.release]
+lto = true
+strip = true

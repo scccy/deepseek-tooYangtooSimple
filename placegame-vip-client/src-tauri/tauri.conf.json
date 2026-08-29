@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PlaceGame VIP 收菜客户端",
+  "version": "0.1.0",
+  "identifier": "cn.placegame.vipclient",
+  "build": {
+    "frontendDist": "../frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "PlaceGame VIP 收菜客户端",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 820,
+        "minHeight": 560,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "Utility",
+    "shortDescription": "PlaceGame VIP 自动收菜与公会协同工具",
+    "icon": ["icons/icon.icns", "icons/icon.png", "icons/icon512.png"]
+  }
+}

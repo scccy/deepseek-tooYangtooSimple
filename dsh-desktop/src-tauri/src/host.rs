@@ -13,6 +13,15 @@ use tauri::Manager;
 /// prefixes, then a single login-shell probe. Nothing machine-specific is
 /// hardcoded.
 ///
+/// Background children get the same treatment: GUI processes boot from
+/// launchd's bare PATH (/usr/bin:/bin:/usr/sbin:/sbin), so toolchains the
+/// user installed for their shell (cargo, conda, java, maven...) are
+/// invisible even though they work in Terminal. One interactive-login-shell
+/// round trip captures the user's real environment (`-lic` sources .zshrc
+/// too, which `-lc` skips) and we re-inject it into the sidecar, so agent
+/// sessions and background tasks see exactly what Terminal sees — no sudo,
+/// nothing for the user to configure.
+///
 /// Probing a login shell costs hundreds of milliseconds, so every resolved
 /// value is computed at most once.
 const MIN_NODE_MAJOR: u64 = 20;
@@ -86,6 +95,85 @@ fn shell_probe() -> &'static ShellProbe {
         };
         ShellProbe { node, npm_root }
     })
+}
+
+/// The environment background children should inherit. GUI processes get
+/// launchd's bare PATH, so we re-inject what the user actually sees in a
+/// terminal: PATH plus a small whitelist (JAVA_HOME / MAVEN_HOME / proxies).
+/// Secrets the shell may export are deliberately NOT captured — keep the
+/// blast radius of agent subprocesses minimal.
+struct ShellEnv {
+    path: Option<String>,
+    java_home: Option<String>,
+    maven_home: Option<String>,
+    http_proxy: Option<String>,
+    https_proxy: Option<String>,
+}
+
+static SHELL_ENV: OnceLock<Option<ShellEnv>> = OnceLock::new();
+
+fn shell_env() -> Option<&'static ShellEnv> {
+    SHELL_ENV.get_or_init(probe_shell_env).as_ref()
+}
+
+/// 用交互式登录 shell 读用户真实环境。`-lic` 会连同 .zshrc 一起 source
+/// （很多安装器——conda init / nvm / fnm——把 PATH 写进 .zshrc，非交互的
+/// `-lc` 会漏掉）。每行以 `__DSH_*=` 标记输出，rc 文件里的杂音被过滤掉。
+/// Windows 无此问题（GUI 进程天然继承 user+system 环境变量），返回 None。
+fn probe_shell_env() -> Option<ShellEnv> {
+    #[cfg(not(unix))]
+    {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let shell = preferred_shell();
+        let command = r#"printf '__DSH_PATH__=%s\n__DSH_JAVA_HOME__=%s\n__DSH_MAVEN_HOME__=%s\n__DSH_HTTP_PROXY__=%s\n__DSH_HTTPS_PROXY__=%s\n' "$PATH" "$JAVA_HOME" "$MAVEN_HOME" "$HTTP_PROXY" "$HTTPS_PROXY""#;
+        let output = Command::new(&shell).arg("-lic").arg(command).output().ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut env = ShellEnv {
+            path: None,
+            java_home: None,
+            maven_home: None,
+            http_proxy: None,
+            https_proxy: None,
+        };
+        for line in text.lines() {
+            let Some((key, value)) = line.trim().split_once('=') else {
+                continue;
+            };
+            match key {
+                "__DSH_PATH__" => env.path = Some(value.trim().to_string()),
+                "__DSH_JAVA_HOME__" => env.java_home = Some(value.trim().to_string()),
+                "__DSH_MAVEN_HOME__" => env.maven_home = Some(value.trim().to_string()),
+                "__DSH_HTTP_PROXY__" => env.http_proxy = Some(value.trim().to_string()),
+                "__DSH_HTTPS_PROXY__" => env.https_proxy = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+        Some(env)
+    }
+}
+
+/// 把登录 shell 的真实环境注入子进程（PATH + 白名单变量）。探测失败时
+/// 什么都不改，保持继承 launchd 环境的原有行为。
+fn inject_shell_env(cmd: &mut Command) {
+    let Some(env) = shell_env() else {
+        return;
+    };
+    if let Some(path) = env.path.as_deref().filter(|p| !p.trim().is_empty()) {
+        cmd.env("PATH", path);
+    }
+    for (key, value) in [
+        ("JAVA_HOME", env.java_home.as_deref()),
+        ("MAVEN_HOME", env.maven_home.as_deref()),
+        ("HTTP_PROXY", env.http_proxy.as_deref()),
+        ("HTTPS_PROXY", env.https_proxy.as_deref()),
+    ] {
+        if let Some(v) = value.filter(|v| !v.trim().is_empty()) {
+            cmd.env(key, v);
+        }
+    }
 }
 
 /// Resolve the `node` binary: env override, standard prefixes, login-shell
@@ -403,8 +491,13 @@ pub fn spawn_sidecar(app: &tauri::AppHandle, www_dir: &Path) -> Result<SpawnedHo
         .env("DSH_HOME", &home)
         .env("DSH_DESKTOP_CWD", &cwd)
         .env("DSH_DESKTOP_APP_VERSION", &version)
-        .env("DSH_TELEMETRY_DISABLED", "1")
-        .current_dir(&cwd)
+        .env("DSH_TELEMETRY_DISABLED", "1");
+    // Re-inject the user's real login-shell environment: launchd hands GUI
+    // processes a bare PATH, so without this every background child (agent
+    // sessions, shell tasks) would fail to find cargo/node/java/conda/mvn
+    // even though Terminal sees them fine.
+    inject_shell_env(&mut cmd);
+    cmd.current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

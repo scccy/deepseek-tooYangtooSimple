@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PlaceGame VIP 收菜客户端</title>
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+<header>
+  <h1>🪙 PlaceGame VIP 收菜客户端</h1>
+  <div class="header-right">
+    <span id="run-state" class="badge">…</span>
+    <button id="btn-cancel" class="danger" title="停止正在跑的 一键收菜/领取收益/批量任务，不再分派剩余账号">⏹ 停止当前任务</button>
+    <button id="btn-start">▶ 世界boss自动</button>
+    <button id="btn-stop">⏸ 关闭</button>
+    <button id="btn-rewards" class="primary">⏫ 领取收益</button>
+    <button id="btn-sync" class="primary">🧺 一键收菜全部</button>
+  </div>
+</header>
+
+<div id="layout">
+  <nav id="sidebar">
+    <a href="#dashboard" data-page="dashboard">📊 总览</a>
+    <a href="#accounts" data-page="accounts">👥 账号</a>
+    <a href="#guild" data-page="guild">🏰 公会</a>
+    <a href="#worldboss" data-page="worldboss">⚔️ Boss统计</a>
+    <a href="#equipment" data-page="equipment">⚔️ 装备</a>
+    <a href="#decompose" data-page="decompose">🗂️ 分解模板</a>
+    <a href="#logs" data-page="logs">📜 日志</a>
+    <a href="#settings" data-page="settings">⚙️ 设置</a>
+  </nav>
+
+  <main>
+    <!-- 总览 -->
+    <section id="page-dashboard" class="page">
+      <div class="card">
+        <h2>账号总览 <span class="hint">挂机累积 · 手动一键收菜 · 世界boss自动</span></h2>
+        <div class="grid3">
+          <div><span class="k">主账号</span><span class="v" id="s-mains">0</span></div>
+          <div><span class="k">小号</span><span class="v" id="s-alts">0</span></div>
+          <div><span class="k">已入会小号</span><span class="v" id="s-joined">0</span></div>
+        </div>
+        <p class="hint">点右上角 <b>「🧺 一键收菜全部」</b> 对所有账号完整处理一轮（收菜+签到/活跃+副职业+换装+捐献+分解+换图+个人首领+街机）。战力/收益评分按收菜时缓存统计。</p>
+      </div>
+      <div class="card">
+        <h2>战斗力分布 <span class="hint">按 Boss 门槛分档（个人/地图/世界 Boss 合并）</span></h2>
+        <div id="power-brackets"><span class="hint">加载中…</span></div>
+      </div>
+      <div class="card">
+        <h2>收益评分分布 <span class="hint">每 200 分一档</span></h2>
+        <div id="revenue-brackets"><span class="hint">加载中…</span></div>
+      </div>
+      <div class="card">
+        <h2>大号状态</h2>
+        <div id="main-status">
+          <div class="kv"><span>今日收菜</span><span id="ms-collect">—</span></div>
+          <div class="kv"><span>下次挂机收益</span><span id="ms-next">—</span></div>
+          <div class="kv"><span>公会入会 / 分红</span><span id="ms-guild">—</span></div>
+          <div class="kv"><span>养成自动化</span><span id="ms-growth">—</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>今日任务完成度</h2>
+        <div id="daily-progress"></div>
+      </div>
+      <div class="card">
+        <h2>最近一轮调度 <span class="hint" id="latest-time"></span></h2>
+        <pre id="latest" class="tick"></pre>
+      </div>
+      <div class="card">
+        <h2>收菜 / 活动设置</h2>
+        <div id="settings-form-dashboard"></div>
+        <div class="toolbar"><button id="btn-save-dashboard" class="primary">💾 保存</button></div>
+      </div>
+    </section>
+
+    <!-- 账号 -->
+    <section id="page-accounts" class="page">
+      <div class="card">
+        <h2>账号</h2>
+        <div class="forms">
+          <fieldset>
+            <legend>添加大号（会长）</legend>
+            <input id="main-user" placeholder="账号（留空=游客大号）" />
+            <input id="main-pass" type="password" placeholder="密码" />
+            <button id="btn-add-main">登录并添加</button>
+            <button id="btn-reg-main">注册新账号</button>
+          </fieldset>
+          <fieldset>
+            <legend>批量创建小号</legend>
+            <input id="alt-count" type="number" value="10" min="1" max="300" />
+            <select id="alt-job">
+              <option value="warrior">战士</option>
+              <option value="mage">法师</option>
+              <option value="summoner">召唤师</option>
+            </select>
+            <select id="alt-type">
+              <option value="formal">正式账户（持久化）</option>
+              <option value="guest">试玩账户</option>
+            </select>
+            <button id="btn-add-alts" class="primary">创建</button>
+            <span id="alt-progress" class="hint"></span>
+          </fieldset>
+        </div>
+        <div class="toolbar">
+          <input id="acc-search" placeholder="搜索昵称/ID" />
+          <select id="acc-phase-filter"><option value="">全部阶段</option></select>
+          <label><input type="checkbox" id="acc-err-only" /> 只看有错误</label>
+          <label><input type="checkbox" id="acc-all" /> 全选</label>
+        </div>
+        <div class="batch-bar" id="batch-bar">
+          <span id="batch-count">已选 0 个</span>
+          <button id="batch-enable">批量启用</button>
+          <button id="batch-disable">批量停用</button>
+          <button id="batch-collect">批量收菜</button>
+          <button id="batch-join">批量入会（一次性）</button>
+          <button id="batch-del" class="danger">批量删除</button>
+        </div>
+        <table id="acc-table">
+          <thead><tr><th style="width:28px"></th><th style="width:36px">ID</th><th style="width:52px">角色</th><th>账号/昵称</th><th style="width:52px">职业</th><th style="width:52px">等级</th><th style="width:64px">阶段</th><th style="width:44px">收菜</th><th style="width:44px">捐献</th><th style="width:170px">地图套装</th><th style="width:36px">启用</th><th style="width:220px">操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    <div class="card">
+        <h2>小号设置</h2>
+        <div id="settings-form-accounts"></div>
+        <div class="toolbar"><button id="btn-save-accounts" class="primary">💾 保存</button></div>
+      </div>
+    </section>
+
+    <!-- 公会 -->
+    <section id="page-guild" class="page">
+      <div class="card">
+        <h2>公会协同（大号当会长 + 小号养号）</h2>
+        <div class="toolbar">
+          <button id="btn-refresh-guild">🔄 刷新公会</button>
+          <button id="btn-approve-all">✅ 批量审批入会</button>
+          <button id="btn-join-eligible" title="找等级达标（≥设置里的入会等级）但尚未入会的小号，逐个提交入会申请">⬆️ 达标未入会 · 手动入会</button>
+          <button id="btn-create-guild">创建公会（用大号）</button>
+        </div>
+        <div class="forms guild-create-form">
+          <fieldset>
+            <legend>创建公会（用大号）</legend>
+            <input id="g-name" placeholder="公会名（默认 VIP 军团）" />
+            <input id="g-motto" placeholder="宣言" />
+          </fieldset>
+        </div>
+        <div id="guild-info" class="hint">尚未建会。</div>
+      </div>
+
+      <div class="card">
+        <h2>需求报表（主号提交 / 补充）</h2>
+        <div class="forms">
+          <fieldset>
+            <legend>主号提交物资需求</legend>
+            <select id="req-key"><option value="">加载中…</option></select>
+            <input id="req-amount" type="number" value="20" min="1" />
+            <button id="btn-submit-req">提交需求</button>
+          </fieldset>
+        </div>
+        <table id="req-table">
+          <thead><tr><th>物品</th><th>数量</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>小号捐献选项</h2>
+        <div class="toolbar">
+          <button id="btn-donate-materials">材料捐献一轮</button>
+          <button id="btn-donate-equip">装备捐献一轮</button>
+          <button id="btn-donate-all">全部捐献一轮</button>
+        </div>
+        <p class="hint">今日：材料捐献 <span id="donate-mat-ok">0</span>/<span id="donate-mat-total">0</span> 号 · 装备 <span id="donate-eq-ok">0</span>/<span id="donate-eq-total">0</span> 号</p>
+      </div>
+
+      <div class="card">
+        <h2>可捐献材料（本地背包快照 · 每次收菜自动写入 SQLite）</h2>
+        <table id="inv-table">
+          <thead><tr><th>账号</th><th>物品</th><th>类型</th><th>数量</th><th>绑定</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    <div class="card">
+        <h2>公会 / 副职业 / 内部市场设置</h2>
+        <div id="settings-form-guild"></div>
+        <div class="toolbar"><button id="btn-save-guild" class="primary">💾 保存</button></div>
+      </div>
+    </section>
+
+    <!-- 世界boss / Boss统计（世界boss + 个人/地图首领 全部统计集中在此页） -->
+    <section id="page-worldboss" class="page">
+      <div class="card">
+        <h2>🌍 世界boss <span class="hint">定时场次 10-11 / 16-17 / 20-21 · 三个场次全自动参与 · 每场每 boss 每账号参与 3 次</span></h2>
+        <div class="toolbar">
+          <span id="wb-window" class="badge">…</span>
+          <span class="hint" id="wb-session"></span>
+          <label class="mini">查看场次：
+            <select id="wb-session-filter" title="只看该场次的参与结果（不影响自动参与；自动参与固定全部场次）">
+              <option value="">当前场次</option>
+              <option value="10">早场 10-11</option>
+              <option value="16">午场 16-17</option>
+              <option value="20">晚场 20-21</option>
+            </select>
+          </label>
+          <button id="btn-wb-refresh">🔄 刷新</button>
+          <button id="btn-wb-run">⚔️ 立即参与一轮</button>
+        </div>
+        <p class="hint" id="wb-note"></p>
+        <table id="wb-table">
+          <thead><tr><th>世界boss</th><th>门槛（含大号）</th><th>场次</th><th>未参与<br>人数</th><th>已参与<br>人数</th><th>剩余<br>次数</th><th>已用<br>次数</th><th>完成度</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>⚔️ 个人/地图首领 <span class="hint" id="solo-day">统计日：-</span></h2>
+        <div class="toolbar">
+          <button id="btn-solo-refresh">🔄 刷新</button>
+          <span class="hint">今日实际击杀 = 全部启用账号首领挑战成功场次合计（打一场计一场，含免费/付费难度）</span>
+        </div>
+        <table id="solo-table">
+          <thead><tr><th>首领</th><th>类型</th><th>地图</th><th>门槛<br>战力</th><th>难度档</th><th>最高打过<br>难度</th><th>今日实际<br>击杀</th><th>参与<br>号数</th><th>主号免费<br>剩余</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>世界boss 设置</h2>
+        <div id="settings-form-worldboss"></div>
+        <div class="toolbar"><button id="btn-save-worldboss" class="primary">💾 保存</button></div>
+      </div>
+    </section>
+
+    <!-- 装备管理（大号：列表 + 详情操作 + 洗练 合一） -->
+    <section id="page-equipment" class="page">
+      <div class="card">
+        <h2>⚔️ 装备管理 <span class="hint">强化 · 升品 · 词条/强化继承 · 分解 · 穿戴 · 解绑 · 洗练（大号）</span></h2>
+        <div id="eq-player" class="hint">加载中…</div>
+        <div class="toolbar">
+          <select id="eq-status">
+            <option value="all">全部状态</option>
+            <option value="equipped">已穿戴</option>
+            <option value="in_bag">背包</option>
+          </select>
+          <select id="eq-slot"><option value="all">全部部位</option></select>
+          <select id="eq-quality"><option value="all">全部品质</option></select>
+          <button id="btn-eq-refresh">🔄 刷新</button>
+        </div>
+        <table id="eq-table">
+          <thead><tr><th>部位</th><th>品质</th><th>名称</th><th>评分</th><th>等级</th><th>状态</th><th>锁定</th><th>绑定</th></tr></thead>
+          <tbody id="eq-tbody"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>详情与操作</h2>
+        <div id="eq-detail" class="hint">点击上方装备查看详情与操作。</div>
+      </div>
+      <div class="card">
+        <h2>⚒️ 装备洗练 <span class="hint">锁定好词条 · 保底追目标词条（大号）</span></h2>
+        <div class="toolbar">
+          <span class="badge">金币 <b id="rf-gold">-</b></span>
+          <span class="badge">元宝 <b id="rf-rare">-</b></span>
+          <button id="btn-rf-refresh">🔄 刷新装备</button>
+          <span class="hint" id="rf-hint"></span>
+        </div>
+        <div id="rf-empty" class="empty" style="display:none">未读取到大号装备——请确认已在「账号」页添加大号并登录成功。</div>
+        <div class="rf-layout">
+          <div class="rf-slots-wrap">
+            <div class="rf-sub">选择部位</div>
+            <div id="rf-slots" class="rf-slots"></div>
+          </div>
+          <div id="rf-detail" class="rf-detail">
+            <div class="empty">← 点选左侧一件装备开始洗练</div>
+          </div>
+        </div>
+      </div>
+    <div class="card">
+        <h2>个人首领 / 大号养成设置</h2>
+        <div id="settings-form-equipment"></div>
+        <div class="toolbar"><button id="btn-save-equipment" class="primary">💾 保存</button></div>
+      </div>
+    </section>
+
+    <!-- 日志 -->
+    <section id="page-logs" class="page">
+      <div class="card">
+        <h2>运行日志 <span class="hint" id="runs-count">…</span></h2>
+        <div class="toolbar">
+          <input id="runs-account" type="number" placeholder="账号ID（空=全部）" />
+          <select id="runs-status"><option value="">全部状态</option><option value="ok">成功</option><option value="failed">失败</option></select>
+          <button id="btn-runs-refresh">刷新</button>
+          <button id="btn-runs-export">导出 CSV</button>
+          <button id="btn-runs-clear" class="danger">清空日志</button>
+          <label><input type="checkbox" id="runs-pause" /> 暂停自动刷新</label>
+        </div>
+        <table id="runs-table">
+          <thead><tr><th style="width:52px">账号</th><th style="width:90px">任务</th><th style="width:48px">状态</th><th>详情</th><th style="width:76px">时间</th><th style="width:56px">操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 分解模板 -->
+    <section id="page-decompose" class="page">
+      <div class="card">
+        <h2>🗂️ 分解模板 <span class="hint">按地图 9 档 · 领取收益/一键收菜时按小号当前地图命中档位执行 · 每档独立设置</span></h2>
+        <table id="dt-table">
+          <thead><tr><th style="width:220px">档位（地图 · 等级段）</th><th style="width:120px">品质上限</th><th>保底评分（低于此分才分解，0=不限）</th><th style="width:130px">保留稀有词条</th><th style="width:150px">装备等级上限</th></tr></thead>
+          <tbody id="dt-tbody"></tbody>
+        </table>
+        <div class="toolbar">
+          <button id="btn-save-decompose-tiers" class="primary">💾 保存分解模板（9档）</button>
+          <span class="hint">保存后立即生效，无需重启。默认：低档拆白/绿，高档拆蓝/紫，稀有保留，评分不限。</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>分解总开关</h2>
+        <div id="settings-form-decompose"></div>
+        <div class="toolbar"><button id="btn-save-decompose" class="primary">💾 保存</button></div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="page-settings" class="page">
+      <div class="card">
+        <h2>设置（调度 / 高级）<span class="hint">其余设置已分散到对应页面</span></h2>
+        <div id="settings-form-settings"></div>
+        <div class="toolbar">
+          <button id="btn-save-settings" class="primary">💾 保存设置</button>
+          <span id="settings-msg" class="hint"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast-container"></div>
+
+<!-- 网页登录凭证弹窗 -->
+<div id="cred-modal" class="modal-wrap" style="display:none">
+  <div class="modal">
+    <h3>🌐 网页快捷登录</h3>
+    <p class="hint">网页已打开。请把下面两个值<strong>分别</strong>粘贴到网页的「账号」「密码」框（不要整段粘贴）：</p>
+    <label class="set-row"><span>账号</span>
+      <span class="set-input"><input id="cred-user" readonly /></span>
+      <button id="btn-copy-user">复制账号</button>
+    </label>
+    <label class="set-row"><span>密码</span>
+      <span class="set-input"><input id="cred-pass" readonly /></span>
+      <button id="btn-copy-pass">复制密码</button>
+    </label>
+    <div class="toolbar" style="justify-content:flex-end">
+      <button id="btn-cred-close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 引导向导 -->
+<div id="wiz-modal" class="modal-wrap" style="display:none">
+  <div class="modal">
+    <h3>🚀 快速上手</h3>
+    <div class="wiz-steps">
+      <span id="wiz-dot-1" class="on">1 添加大号</span>
+      <span id="wiz-dot-2">2 创建公会</span>
+      <span id="wiz-dot-3">3 批量小号</span>
+    </div>
+    <div class="wiz-body">
+      <div id="wiz-page-1">
+        <label>账号（留空 = 游客大号）<input id="wiz-user" /></label>
+        <label>密码<input id="wiz-pass" type="password" /></label>
+        <p class="hint">已有账号直接登录；没有的话先去账号页「注册新账号」，或用游客大号。</p>
+      </div>
+      <div id="wiz-page-2" style="display:none">
+        <label>公会名<input id="wiz-gname" value="VIP 军团" /></label>
+        <label>宣言<input id="wiz-gmotto" placeholder="（可选）" /></label>
+        <p class="hint">用大号创建公会，小号满 12 级后自动申请入会。</p>
+      </div>
+      <div id="wiz-page-3" style="display:none">
+        <label>数量<input id="wiz-count" type="number" value="120" min="1" max="300" /></label>
+        <label>职业
+          <select id="wiz-job">
+            <option value="warrior">战士</option>
+            <option value="mage">法师</option>
+            <option value="summoner">召唤师</option>
+          </select>
+        </label>
+        <p class="hint" id="wiz-progress"></p>
+      </div>
+    </div>
+    <div class="wiz-foot">
+      <button id="wiz-skip">跳过向导</button>
+      <span>
+        <button id="wiz-back" style="display:none">上一步</button>
+        <button id="wiz-next" class="primary">下一步</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- 自绘确认弹窗：Tauri webview 中 window.confirm 被静默拦截返回 false，
+     所有"是否执行"确认统一走这里（删除/强化/升品/分解/解绑/清空日志等） -->
+<div id="confirm-modal" class="modal-wrap" style="display:none">
+  <div class="modal">
+    <h3>⚠️ 确认操作</h3>
+    <p id="confirm-text" class="confirm-text"></p>
+    <div class="toolbar" style="justify-content:flex-end">
+      <button id="confirm-cancel">取消</button>
+      <button id="confirm-ok" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

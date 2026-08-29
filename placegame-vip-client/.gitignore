@@ -1,0 +1,9 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+# 本地数据不要入库
+*.db
+*.db-wal
+*.db-shm
+# 系统
+.DS_Store
