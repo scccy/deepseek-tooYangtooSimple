@@ -35,8 +35,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>${PRODUCT_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.6.5</string>
-  <key>CFBundleVersion</key><string>0.6.5</string>
+  <key>CFBundleShortVersionString</key><string>0.6.7</string>
+  <key>CFBundleVersion</key><string>0.6.7</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
