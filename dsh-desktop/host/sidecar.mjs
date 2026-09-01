@@ -599,6 +599,11 @@ function mockEventTarget() {
     removeListener(event, fn) {
       return this.off(event, fn);
     },
+    removeAllListeners(event) {
+      if (event === undefined) listeners.clear();
+      else listeners.delete(event);
+      return this;
+    },
     addListener(event, fn) {
       return this.on(event, fn);
     },
@@ -621,6 +626,11 @@ function mockEventTarget() {
 
 function createMockRequest({ url, method, headers, body }) {
   let destroyed = false;
+  // One-shot body consumption gate shared by the on('data') pump and the
+  // async iterator, mirroring node:http streams: whichever channel reads the
+  // body first wins, the other sees nothing (never double-deliver).
+  const hasBody = body !== undefined && body !== null && body.byteLength > 0;
+  let bodyConsumed = false;
   const socket = {
     ...mockEventTarget(),
     remoteAddress: '127.0.0.1',
@@ -644,7 +654,11 @@ function createMockRequest({ url, method, headers, body }) {
     socket,
     connection: socket,
     aborted: false,
-    complete: true,
+    // node:http semantics: a bodyless request is fully received by the time
+    // the handler runs; a body-bearing request completes only once the body
+    // has been consumed ('end' emitted, complete=true).
+    complete: !hasBody,
+    readableEnded: !hasBody,
     rawHeaders: Object.entries(headers ?? {}).flatMap(([key, value]) => [key, String(value)]),
     destroyed,
     destroy() {
@@ -656,9 +670,36 @@ function createMockRequest({ url, method, headers, body }) {
       this.emit('close');
     },
     async *[Symbol.asyncIterator]() {
-      if (body === undefined || body === null || body.byteLength === 0) return;
+      if (bodyConsumed) return;
+      bodyConsumed = true;
+      if (!hasBody) return;
       yield Buffer.from(body);
+      req.complete = true;
+      req.readableEnded = true;
+      req.emit('end');
     },
+  };
+  // Classic readable-stream semantics: the body is pumped through
+  // 'data'/'end' events once the handler attaches its first 'data' listener
+  // (plugins like dsh-remote's readBody wait on req.on('data') + req.on('end')
+  // and hang forever without this channel). Emission is deferred one turn so
+  // handlers that register 'data' and 'end' synchronously never miss 'end'.
+  const baseOn = req.on;
+  let pumpScheduled = false;
+  req.on = function (event, fn) {
+    const result = baseOn.call(req, event, fn);
+    if (event === 'data' && !pumpScheduled && !bodyConsumed) {
+      pumpScheduled = true;
+      setImmediate(() => {
+        if (bodyConsumed) return;
+        bodyConsumed = true;
+        if (hasBody) req.emit('data', Buffer.from(body));
+        req.complete = true;
+        req.readableEnded = true;
+        req.emit('end');
+      });
+    }
+    return result;
   };
   return req;
 }
@@ -800,6 +841,11 @@ function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
     },
     off(event, fn) {
       listeners.get(event)?.delete(fn);
+      return res;
+    },
+    removeAllListeners(event) {
+      if (event === undefined) listeners.clear();
+      else listeners.delete(event);
       return res;
     },
     _emit(event, ...args) {
