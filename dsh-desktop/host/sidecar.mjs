@@ -665,21 +665,109 @@ function createMockRequest({ url, method, headers, body }) {
 
 function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
   const listeners = new Map();
+  // Header storage mirrors node:http's case-insensitive namespace:
+  // `_headers` keeps the ORIGINAL key casing (what goes on the wire / into
+  // the headers frame, so existing writeHead flows stay byte-identical),
+  // while `_index` maps lowercase names to the current key so setHeader(),
+  // writeHead(), getHeader(), hasHeader(), removeHeader() and appendHeader()
+  // all interoperate regardless of casing.
+  const _headers = {};
+  const _index = new Map();
+  const dropHeader = (name) => {
+    const key = _index.get(name);
+    if (key !== undefined) {
+      delete _headers[key];
+      _index.delete(name);
+    }
+  };
   const res = {
     statusCode: 200,
     headersSent: false,
     writableEnded: false,
     destroyed: false,
     _chunks: [],
-    _headers: {},
-    writeHead(status, headers) {
+    _headers,
+    // node:http flushes implicit headers on the first write()/end() when the
+    // handler never calls writeHead() (dsh-remote's sendJson only calls
+    // setHeader + end). Flushing here guarantees the renderer always receives
+    // the status/headers frame BEFORE any body/end frame, so api() can parse
+    // the JSON body instead of falling back to a bare "HTTP 500".
+    sendHeaders() {
+      if (res.headersSent) return;
+      res.headersSent = true;
+      onHeaders?.();
+    },
+    writeHead(status, statusMessage, headers) {
+      if (res.headersSent || res.writableEnded) return res;
       res.statusCode = status;
-      Object.assign(res._headers, headers ?? {});
+      // Accept both node:http forms: writeHead(status, headers) and
+      // writeHead(status, statusMessage, headers). The mock never serializes a
+      // statusMessage, so a string second argument is ignored.
+      if (typeof statusMessage === 'string') {
+        if (headers === undefined) headers = null;
+      } else if (statusMessage !== undefined && statusMessage !== null) {
+        headers = statusMessage;
+      }
+      // Merge case-insensitively (node:http semantics): the headers object
+      // shares one lowercase namespace with setHeader()/appendHeader() and —
+      // as in node:http — takes precedence over previously set values, so
+      // 'Content-Type' set via setHeader() can never survive as a duplicate
+      // differently-cased key after writeHead().
+      for (const [key, value] of Object.entries(headers ?? {})) {
+        if (value === undefined || value === null) continue;
+        const name = String(key).toLowerCase();
+        const existing = _index.get(name);
+        if (existing !== undefined && existing !== key) delete _headers[existing];
+        _headers[key] = value;
+        _index.set(name, key);
+      }
       res.headersSent = true;
       onHeaders?.();
       return res;
     },
+    setHeader(name, value) {
+      const key = String(name).toLowerCase();
+      dropHeader(key);
+      _headers[key] = value;
+      _index.set(key, key);
+      return res;
+    },
+    appendHeader(name, value) {
+      const key = String(name).toLowerCase();
+      const existingKey = _index.get(key);
+      if (existingKey === undefined) {
+        _headers[key] = value;
+        _index.set(key, key);
+      } else if (Array.isArray(_headers[existingKey])) {
+        _headers[existingKey].push(value);
+      } else {
+        _headers[existingKey] = [_headers[existingKey], value];
+      }
+    },
+    getHeader(name) {
+      const existingKey = _index.get(String(name).toLowerCase());
+      return existingKey === undefined ? undefined : _headers[existingKey];
+    },
+    getHeaders() {
+      return { ..._headers };
+    },
+    getHeaderNames() {
+      return Object.keys(_headers);
+    },
+    hasHeader(name) {
+      return _index.has(String(name).toLowerCase());
+    },
+    removeHeader(name) {
+      dropHeader(String(name).toLowerCase());
+      return res;
+    },
+    flushHeaders() {
+      res.sendHeaders();
+      return res;
+    },
     write(chunk) {
+      if (res.writableEnded || res.destroyed) return false;
+      res.sendHeaders();
       const buffer = chunk === undefined ? undefined : Buffer.from(chunk);
       if (buffer !== undefined) {
         res._chunks.push(buffer);
@@ -688,12 +776,14 @@ function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
       return true;
     },
     end(chunk) {
-      if (chunk !== undefined) {
-        res._chunks.push(Buffer.from(chunk));
-        onChunk?.(Buffer.from(chunk));
-      }
-      if (res.writableEnded) return;
+      if (res.writableEnded || res.destroyed) return;
+      res.sendHeaders();
       res.writableEnded = true;
+      if (chunk !== undefined) {
+        const buffer = Buffer.from(chunk);
+        res._chunks.push(buffer);
+        onChunk?.(buffer);
+      }
       onEnd?.();
     },
     on(event, fn) {
