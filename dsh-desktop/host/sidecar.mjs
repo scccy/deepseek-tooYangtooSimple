@@ -918,7 +918,17 @@ function resumeFetch(id) {
 }
 
 function handleFetch(msg) {
-  const traceDescribe = (msg.url ?? '').includes('/api/host.describe');
+  // The rendered HTML repoints plugin bundle URLs to /__plugins/ for the
+  // shell's static fast path. Requests that still reach the sidecar (combo
+  // batch URLs like /__plugins/??a,b&rev=… have no static file) must be
+  // rewritten back to the real /plugins/ prefix BEFORE the mock request is
+  // built: serveBundle keys its response cache on pathname+search, so a
+  // rewritten route with an unrewritten req.url would miss and 404.
+  const rawUrl = msg.url ?? '/';
+  const url = rawUrl.startsWith('/__plugins')
+    ? `/plugins${rawUrl.slice('/__plugins'.length)}`
+    : rawUrl;
+  const traceDescribe = url.includes('/api/host.describe');
   const res = createMockResponse({
     onHeaders() {
       frame({
@@ -944,18 +954,18 @@ function handleFetch(msg) {
       ? null
       : Buffer.from(msg.body, 'base64');
   const req = createMockRequest({
-    url: msg.url ?? '/',
+    url,
     method: msg.method ?? 'GET',
     headers: sanitizeHeaders(msg.headers),
     body,
   });
   pendingFetches.set(msg.id, { req, res, sentEnd: false });
   if (dshenv('DSH_DESKTOP_TRACE_BRIDGE', 'DSH_MAC_TRACE_BRIDGE') === '1') {
-    console.error(`[host-trace] fetch ${msg.method} ${msg.url}`);
+    console.error(`[host-trace] fetch ${msg.method} ${url}`);
   }
   (async () => {
     try {
-      const route = routeFor(msg.url ?? '/');
+      const route = routeFor(url);
       if (route === undefined) {
         res.writeHead(404);
         res.end('not found');
