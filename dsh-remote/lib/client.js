@@ -1304,6 +1304,10 @@ window.__ModuleLoader__.load({
     }
 
     exports.name = name
+    // dsh 0.1.2-rc.1（新版 cordis）：ctx.workspaces 等服务属性访问要求插件
+    // 显式声明 inject，否则 apply 抛 "cannot get property 'workspaces'
+    // without inject"。声明后 runner 会等服务就绪再调用 apply。
+    exports.inject = ['workspaces']
     exports.apply = apply
     return module.exports
   },
