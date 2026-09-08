@@ -514,9 +514,12 @@ async function bootHost() {
   const homeGuess = process.env.HOME ?? process.env.USERPROFILE ?? '/';
   const cwd = dshenv('DSH_DESKTOP_CWD', 'DSH_MAC_CWD') ?? homeGuess;
   process.chdir(cwd);
-  healProfilesModuleFallback(INSTALL_ANCHOR);
 
   const profile = loadProfile(NAME, 'web', INSTALL_ANCHOR, undefined, { userLayer: true });
+  // dsh >= 0.1.2-rc.1: healProfilesModuleFallback 改为 async 对象参数
+  // { installAnchor, profile?, home? }，见官方 profile-boot 用法。
+  await healProfilesModuleFallback({ installAnchor: INSTALL_ANCHOR, profile });
+  console.error('[host] boot: profile loaded, module fallback healed');
   writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG);
   ensureDesktopAboutBundle(profile.dir);
   // DSH Desktop 2.x public Host services. Their presence is how cross-
@@ -567,6 +570,7 @@ async function bootHost() {
     hostCtx.provide('desktopProfiles', desktopProfiles);
     hostCtx.provide('desktopPnpm', desktopPnpm);
   });
+  console.error('[host] boot: tree settled');
   // The IPC webServer emits `webserver/index-inject` on the settled host
   // context; every subscriber (client-modules, theme) has registered by now.
   webServer.attachContext(ctx);
@@ -863,7 +867,17 @@ function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
 
 function routeFor(url) {
   const rawPath = new URL(url, 'http://dsh.internal').pathname;
-  return webServer.match(rawPath) ?? webServer.fallbackHandler();
+  // The rendered HTML repoints plugin bundle URLs to /__plugins/ so the
+  // shell's static fast path serves the copied bundles. dsh >= 0.1.2-rc.1
+  // additionally emits combo batch URLs (`/plugins/??a,b&rev=…`) that no
+  // static file can satisfy — map any /__plugins/ request back onto the
+  // real /plugins/ route (client-modules' serveBundle) so both the single
+  // and combo forms resolve. The query string is kept verbatim: serveBundle
+  // keys its response cache on pathname+search.
+  const routePath = rawPath.startsWith('/__plugins')
+    ? `/plugins${rawPath.slice('/__plugins'.length)}`
+    : rawPath;
+  return webServer.match(routePath) ?? webServer.fallbackHandler();
 }
 
 function dispatchRoute(route, req, res) {
