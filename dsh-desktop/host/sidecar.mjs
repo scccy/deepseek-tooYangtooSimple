@@ -574,6 +574,18 @@ async function bootHost() {
   // The IPC webServer emits `webserver/index-inject` on the settled host
   // context; every subscriber (client-modules, theme) has registered by now.
   webServer.attachContext(ctx);
+  // dsh >= 0.1.2-rc.1 fences /api/* behind BrowserAuth (launch-token cookie
+  // exchange). Resolve the connection service so the bridge can mint session
+  // cookies for the embedded WebView (see ensureBridgeAuthCookie).
+  try {
+    const conn = ctx.connection ?? ctx.resolve?.('connection') ?? null;
+    bridgeBrowserAuth = conn?.browserAuth ?? null;
+    console.error(
+      `[host] browser-auth: ${bridgeBrowserAuth ? 'available' : `unavailable (connection=${typeof conn})`}`,
+    );
+  } catch (error) {
+    console.error(`[host] browser-auth resolve failed: ${error?.message ?? error}`);
+  }
   return ctx;
 }
 
@@ -917,6 +929,41 @@ function resumeFetch(id) {
   pendingFetches.delete(id);
 }
 
+// --- desktop bridge browser-auth -------------------------------------------
+// Resolved after boot; null when the connection plugin exposes no BrowserAuth
+// (dsh < 0.1.2-rc.1). authority (raw Host header) -> "name=value" cookie.
+let bridgeBrowserAuth = null;
+const bridgeAuthCookies = new Map();
+
+function ensureBridgeAuthCookie(host) {
+  if (!host || bridgeBrowserAuth === null) return undefined;
+  let cookie = bridgeAuthCookies.get(host);
+  if (cookie !== undefined) return cookie;
+  const captured = {};
+  const res = {
+    writeHead(status, headers) {
+      captured.status = status;
+      Object.assign(captured, headers);
+    },
+    end() {},
+  };
+  const req = {
+    method: 'GET',
+    url: `/?token=${encodeURIComponent(bridgeBrowserAuth.launchToken)}`,
+    headers: { host },
+  };
+  bridgeBrowserAuth.authorizeIndex(req, res);
+  const raw = captured['set-cookie'];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string' || captured.status !== 303) {
+    console.error(`[host] browser-auth mint failed (status=${captured.status})`);
+    return undefined;
+  }
+  cookie = value.split(';')[0];
+  bridgeAuthCookies.set(host, cookie);
+  return cookie;
+}
+
 function handleFetch(msg) {
   // The rendered HTML repoints plugin bundle URLs to /__plugins/ for the
   // shell's static fast path. Requests that still reach the sidecar (combo
@@ -931,6 +978,10 @@ function handleFetch(msg) {
   const traceDescribe = url.includes('/api/host.describe');
   const res = createMockResponse({
     onHeaders() {
+      if (dshenv('DSH_DESKTOP_TRACE_BRIDGE', 'DSH_MAC_TRACE_BRIDGE') === '1') {
+        const ct = res.getHeader && (res.getHeader('content-type') ?? res._headers?.['content-type']);
+        console.error(`[host-trace] <- ${res.statusCode} ct=${ct} ${url.slice(0, 140)}`);
+      }
       frame({
         type: 'headers',
         id: msg.id,
@@ -953,15 +1004,26 @@ function handleFetch(msg) {
     msg.body === undefined || msg.body === null || msg.body === ''
       ? null
       : Buffer.from(msg.body, 'base64');
+  const headers = sanitizeHeaders(msg.headers);
+  // dsh >= 0.1.2-rc.1: /api/* routes sit behind BrowserAuth — a launch-token
+  // query on `/` mints an authority-bound session cookie, and unauthenticated
+  // requests get 401. The desktop WebView loads the static index directly and
+  // never performs that exchange, so the bridge performs it server-side via
+  // the official authorizeIndex path and injects the cookie into bridged
+  // requests (per Host authority, minted lazily).
+  if (bridgeBrowserAuth && !headers.cookie) {
+    const cookie = ensureBridgeAuthCookie(headers.host);
+    if (cookie) headers.cookie = cookie;
+  }
   const req = createMockRequest({
     url,
     method: msg.method ?? 'GET',
-    headers: sanitizeHeaders(msg.headers),
+    headers,
     body,
   });
   pendingFetches.set(msg.id, { req, res, sentEnd: false });
   if (dshenv('DSH_DESKTOP_TRACE_BRIDGE', 'DSH_MAC_TRACE_BRIDGE') === '1') {
-    console.error(`[host-trace] fetch ${msg.method} ${url}`);
+    console.error(`[host-trace] fetch ${msg.method} ${url.slice(0, 120)} host=${msg.headers?.host} origin=${msg.headers?.origin}`);
   }
   (async () => {
     try {
@@ -1083,17 +1145,23 @@ function openGenericWs(msg, path) {
   });
   session.socket = socket;
 
+  const wsHeaders = {
+    host: '127.0.0.1',
+    origin: 'http://127.0.0.1',
+    upgrade: 'websocket',
+    connection: 'Upgrade',
+    'sec-websocket-key': randomBytes(16).toString('base64'),
+    'sec-websocket-version': '13',
+  };
+  // dsh >= 0.1.2-rc.1: the gateway WS upgrade is BrowserAuth-fenced like the
+  // /api routes — inject the bridge-minted session cookie or the handshake
+  // gets a 401 rejection ("upgrade refused").
+  const wsCookie = ensureBridgeAuthCookie(wsHeaders.host);
+  if (wsCookie !== undefined) wsHeaders.cookie = wsCookie;
   const req = createMockRequest({
     url: path,
     method: 'GET',
-    headers: {
-      host: '127.0.0.1',
-      origin: 'http://127.0.0.1',
-      upgrade: 'websocket',
-      connection: 'Upgrade',
-      'sec-websocket-key': randomBytes(16).toString('base64'),
-      'sec-websocket-version': '13',
-    },
+    headers: wsHeaders,
     body: null,
   });
   try {
