@@ -26,7 +26,7 @@ else
 fi
 
 PRODUCT_NAME="DeepSeek Harness Desktop"
-VERSION="${VERSION:-0.6.7}"
+VERSION="${VERSION:-0.6.8}"
 IDENTIFIER="com.deepseek.harness.desktop"
 BUNDLE_ROOT="src-tauri/target/release/bundle/macos"
 APP_DIR="${BUNDLE_ROOT}/${PRODUCT_NAME}.app"
