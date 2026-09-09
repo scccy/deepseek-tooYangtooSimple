@@ -1310,6 +1310,9 @@ function handleMessage(line) {
       return;
     case 'ws-open': {
       const result = handleWsOpen(msg);
+      if (dshenv('DSH_DESKTOP_TRACE_BRIDGE', 'DSH_MAC_TRACE_BRIDGE') === '1') {
+        console.error(`[host-trace] ws-open ${msg.path} -> ${result.ok ? 'OK' : `REFUSED: ${result.reason}`}`);
+      }
       frame({ type: 'ws-result', id: msg.id, ok: result.ok === true, reason: result.reason ?? '' });
       return;
     }
