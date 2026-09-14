@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
-PRODUCT_NAME="DeepSeek Harness Desktop"
+PRODUCT_NAME="DSH Desktop"
 APP_DIR="src-tauri/target/debug/bundle/macos/${PRODUCT_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 

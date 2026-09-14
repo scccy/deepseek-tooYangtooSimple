@@ -22,7 +22,7 @@ const LOADING_HTML: &str = r#"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>DeepSeek Harness Desktop</title>
+<title>DSH Desktop</title>
 <style>
   html, body { margin: 0; height: 100%; background: #101016; color: #c8c8d2;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
@@ -39,7 +39,7 @@ const LOADING_HTML: &str = r#"<!DOCTYPE html>
 <body>
 <div class="box">
   <div class="spinner" id="spin"></div>
-  <div id="label">正在启动 DeepSeek Harness Desktop 主机…</div>
+  <div id="label">正在启动 DSH Desktop 主机…</div>
   <div id="err"></div>
 </div>
 <script>

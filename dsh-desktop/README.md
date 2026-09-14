@@ -47,7 +47,8 @@
 
 ## 壳层特性
 
-- 应用菜单栏：App / Edit / View / Window（跨平台；macOS 为顶部菜单栏）
+- 应用菜单栏：App / Edit / View（跨平台；macOS 为顶部菜单栏）；最小化 / 关闭窗口
+  交由系统（macOS traffic lights、Windows/Linux 系统装饰），关闭按钮为隐藏到托盘
 - 通用设置里的「热重启 / Hot restart」：不关闭、不移动窗口，原地替换 Node
   sidecar 进程组，新主机就绪后自动重新加载页面
 - 通用设置里的「dsh 版本与更新 / DSH version & update」：显示本地/仓库版本，支持

@@ -25,7 +25,7 @@ else
   esac
 fi
 
-PRODUCT_NAME="DeepSeek Harness Desktop"
+PRODUCT_NAME="DSH Desktop"
 VERSION="${VERSION:-0.6.8}"
 IDENTIFIER="com.deepseek.harness.desktop"
 BUNDLE_ROOT="src-tauri/target/release/bundle/macos"

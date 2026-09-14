@@ -196,15 +196,15 @@ fn open_popup_window(
 
 fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
     // ------------------------- application menu -------------------------
-    let about = PredefinedMenuItem::about(app, Some("关于 DeepSeek Harness Desktop"), None)?;
+    let about = PredefinedMenuItem::about(app, Some("关于 DSH Desktop"), None)?;
     let services = PredefinedMenuItem::services(app, None)?;
     let hide = PredefinedMenuItem::hide(app, None)?;
     let hide_others = PredefinedMenuItem::hide_others(app, None)?;
     let show_all = PredefinedMenuItem::show_all(app, None)?;
-    let quit = MenuItemBuilder::with_id("menu-quit", "退出 DeepSeek Harness Desktop")
+    let quit = MenuItemBuilder::with_id("menu-quit", "退出 DSH Desktop")
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
-    let app_menu = SubmenuBuilder::new(app, "DeepSeek Harness Desktop")
+    let app_menu = SubmenuBuilder::new(app, "DSH Desktop")
         .item(&about)
         .separator()
         .item(&services)
@@ -242,31 +242,23 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
         .item(&fullscreen)
         .build()?;
 
-    let minimize = PredefinedMenuItem::minimize(app, None)?;
-    let close = PredefinedMenuItem::close_window(app, None)?;
-    let window_menu = SubmenuBuilder::new(app, "Window")
-        .item(&minimize)
-        .item(&close)
-        .build()?;
-
     let menu = MenuBuilder::new(app)
         .item(&app_menu)
         .item(&edit_menu)
         .item(&view_menu)
-        .item(&window_menu)
         .build()?;
     app.set_menu(menu)?;
 
     // ------------------------- menu-bar tray -------------------------
-    let tray_show = MenuItemBuilder::with_id("tray-show", "显示 DeepSeek Harness Desktop").build(app)?;
-    let tray_quit = MenuItemBuilder::with_id("tray-quit", "退出 DeepSeek Harness Desktop").build(app)?;
+    let tray_show = MenuItemBuilder::with_id("tray-show", "显示 DSH Desktop").build(app)?;
+    let tray_quit = MenuItemBuilder::with_id("tray-quit", "退出 DSH Desktop").build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .item(&tray_show)
         .separator()
         .item(&tray_quit)
         .build()?;
     let mut tray_builder = TrayIconBuilder::with_id("dsh-desktop-tray")
-        .tooltip("DeepSeek Harness Desktop")
+        .tooltip("DSH Desktop")
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         // macOS convention: a monochrome template image that adapts to light
@@ -424,7 +416,7 @@ fn startup_update_check(app: tauri::AppHandle) {
             let latest = info.latest_version.clone().unwrap_or_else(|| "?".to_string());
             bridge::show_notification(
                 &app,
-                "DeepSeek Harness Desktop".to_string(),
+                "DSH Desktop".to_string(),
                 format!("dsh 有新版本 v{latest} 可用（当前 v{local}），可在设置中一键更新"),
                 false,
             );
@@ -460,7 +452,7 @@ fn startup_stale_server_check(app: tauri::AppHandle) {
             eprintln!("dsh-desktop: stale standalone dsh web detected on 127.0.0.1:3080");
             bridge::show_notification(
                 &app,
-                "DeepSeek Harness Desktop".to_string(),
+                "DSH Desktop".to_string(),
                 "检测到旧版 dsh web 仍在 127.0.0.1:3080 监听：桌面版为无端口形态，请用 pkill -f \"dsh --profile web\" 结束旧进程，避免浏览器打开到旧页面"
                     .to_string(),
                 false,
@@ -679,7 +671,7 @@ fn main() {
             let url: tauri::Url = LOADING_URL.parse().expect("valid custom-scheme url");
             let quitting_flag = state.quitting.clone();
             let mut window_builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::CustomProtocol(url))
-                .title("DeepSeek Harness Desktop")
+                .title("DSH Desktop")
                 .inner_size(1440.0, 920.0)
                 .min_inner_size(960.0, 640.0);
             #[cfg(target_os = "macos")]

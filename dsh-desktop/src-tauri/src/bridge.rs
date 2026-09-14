@@ -615,7 +615,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                     let title = msg
                         .get("title")
                         .and_then(Value::as_str)
-                        .unwrap_or("DeepSeek Harness Desktop");
+                        .unwrap_or("DSH Desktop");
                     let body = msg.get("body").and_then(Value::as_str).unwrap_or_default();
                     let background_only = msg
                         .get("backgroundOnly")
