@@ -236,10 +236,15 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
     let fullscreen = PredefinedMenuItem::fullscreen(app, None)?;
+    let minimize = PredefinedMenuItem::minimize(app, None)?;
+    let close = PredefinedMenuItem::close_window(app, None)?;
     let view_menu = SubmenuBuilder::new(app, "View")
         .item(&reload)
         .separator()
         .item(&fullscreen)
+        .separator()
+        .item(&minimize)
+        .item(&close)
         .build()?;
 
     let menu = MenuBuilder::new(app)
