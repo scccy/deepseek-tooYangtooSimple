@@ -100,13 +100,14 @@ NSIS 安装器。Linux 的 deb/AppImage/tar.gz 打包由 CI（`tauri build`）�
   同一份 dsh 包、同一个 DSH 数据目录——插件、会话、设置天然一致，无隔离副本。
 - **后台任务环境自动注入**：GUI 进程从 launchd 拿到的是出厂裸 PATH
   （`/usr/bin:/bin:/usr/sbin:/sbin`），用户装在 shell 里的工具链
-  （cargo / conda / java / maven…）对后台任务不可见。host 启动时用
+  （cargo / conda / java / maven / 代理…）对后台任务不可见。host 启动时用
   交互式登录 shell（`-lic`，连 `.zshrc` 一起 source）读一次用户真实环境，
-  把 `PATH` 及白名单变量（`JAVA_HOME` / `MAVEN_HOME` / `HTTP(S)_PROXY`）注入
-  sidecar，agent 会话与后台任务因此与终端看到同一套环境——用户零配置、
-  零 sudo，无需 `launchctl setenv`，也不改动用户的任何系统状态（含
-  `java_home` 注册；`$JAVA_HOME/bin` 已在注入的 PATH 中，`java` 直接可用，
-  `/usr/bin/java` stub 是否可用属于用户自己的系统 bin 配置）。
+  **默认把整个 exported 环境注入 sidecar**（不再维护逐工具白名单——JAVA_HOME、
+  代理、PYTHONHOME、RUSTUP_HOME 等本质都是环境变量，全部一并带上），agent
+  会话与后台任务因此与终端看到同一套环境——用户零配置、零 sudo，无需
+  `launchctl setenv`，也不改动用户的任何系统状态。需要更小的暴露面时设
+  `DSH_DESKTOP_ENV_MINIMAL=1`，退回到只注入 `PATH` + `JAVA_HOME` /
+  `MAVEN_HOME` / 代理族（大小写）的安全集。
 
 ## 环境变量
 
@@ -118,6 +119,7 @@ NSIS 安装器。Linux 的 deb/AppImage/tar.gz 打包由 CI（`tauri build`）�
 | `DSH_DESKTOP_DSH_ROOT` | 覆盖 `@deepseek-ai/dsh` 包根目录 | 由 bin 路径推导 |
 | `DSH_DESKTOP_PROFILE` | host boot 使用的 profile 名 | `web`（与 CLI 共享） |
 | `DSH_DESKTOP_CWD` | host 启动工作目录 | 用户主目录 |
+| `DSH_DESKTOP_ENV_MINIMAL` | `1` 时只注入 PATH + 少量安全变量（JAVA_HOME / MAVEN_HOME / 代理族） | 关（默认注入 login-shell 完整环境） |
 | `DSH_HOME` / `DSH_DESKTOP_HOME` | DSH 数据目录 | 平台默认（`~/.dsh` / `%APPDATA%`） |
 | `DSH_DESKTOP_TRACE_BRIDGE` | `1` 时打印桥接协议与路由跟踪（调试） | 关 |
 

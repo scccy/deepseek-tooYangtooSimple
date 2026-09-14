@@ -31,6 +31,14 @@ pub struct ReadyInfo {
     pub error: Option<String>,
 }
 
+/// Latest startup/lifecycle status reported by the sidecar (`status` frames).
+/// Powers the recovery page's stage display.
+#[derive(Debug, Clone, Default)]
+pub struct StatusInfo {
+    pub stage: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum BridgeEvent {
     Headers {
@@ -93,6 +101,7 @@ pub struct Bridge {
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, Sender<BridgeEvent>>>,
     ready: RwLock<Option<ReadyInfo>>,
+    status: RwLock<Option<StatusInfo>>,
     exited: AtomicBool,
     /// Incremented on every sidecar respawn. Reader threads and in-flight
     /// requests belong to one generation; once the generation moves on they
@@ -110,6 +119,7 @@ impl Bridge {
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             ready: RwLock::new(None),
+            status: RwLock::new(None),
             exited: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             lifecycle: Mutex::new(()),
@@ -167,6 +177,7 @@ impl Bridge {
             });
         }
         *self.ready.write().unwrap() = None;
+        *self.status.write().unwrap() = None;
         self.exited.store(false, Ordering::SeqCst);
     }
 
@@ -176,6 +187,18 @@ impl Bridge {
 
     pub fn www_dir(&self) -> Option<PathBuf> {
         self.ready.read().unwrap().as_ref()?.www.clone()
+    }
+
+    /// Record the sidecar's latest `status` frame (startup stage + detail).
+    pub fn set_status(&self, stage: &str, detail: &str) {
+        *self.status.write().unwrap() = Some(StatusInfo {
+            stage: stage.to_string(),
+            detail: detail.to_string(),
+        });
+    }
+
+    pub fn status(&self) -> Option<StatusInfo> {
+        self.status.read().unwrap().clone()
     }
 
     fn set_ready(&self, _ok: bool, www: Option<PathBuf>, error: Option<String>) {
@@ -222,6 +245,49 @@ impl Bridge {
         Ok((id, rx))
     }
 
+    /// Send an NDJSON header followed by a raw body (request chunk-bin): the
+    /// header carries `bodyLen` and the sidecar reads exactly that many
+    /// bytes, so upload bodies skip base64 and never blow up the line.
+    /// Mirrors `request()`'s state handling.
+    pub fn request_with_body(
+        &self,
+        msg: Value,
+        body: Vec<u8>,
+    ) -> Result<(u64, Receiver<BridgeEvent>), String> {
+        let id = self.next_id();
+        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+            let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
+            eprintln!("[dsh-bridge] send {kind} as {id} (+{} bytes)", body.len());
+        }
+        let mut full = msg.clone();
+        full["id"] = json!(id);
+        if !body.is_empty() {
+            full["bodyLen"] = json!(body.len());
+        }
+        let (tx, rx) = mpsc::channel();
+        self.pending.lock().unwrap().insert(id, tx);
+        let line = format!("{}\n", full);
+        let mut guard = self.stdin.lock().unwrap();
+        let Some(stdin) = guard.as_mut() else {
+            drop(guard);
+            self.pending.lock().unwrap().remove(&id);
+            return Err("bridge stdin is not attached".to_string());
+        };
+        let write = if body.is_empty() {
+            stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush())
+        } else {
+            stdin
+                .write_all(line.as_bytes())
+                .and_then(|_| stdin.write_all(&body))
+                .and_then(|_| stdin.flush())
+        };
+        write.map_err(|e| {
+            self.pending.lock().unwrap().remove(&id);
+            format!("bridge write failed: {e}")
+        })?;
+        Ok((id, rx))
+    }
+
     pub async fn request_async(
         self: Arc<Self>,
         msg: Value,
@@ -260,16 +326,16 @@ impl Bridge {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> Result<(u16, HashMap<String, String>, Vec<u8>), String> {
-        let body_b64 = body
-            .as_ref()
-            .map(|b| base64::engine::general_purpose::STANDARD.encode(b));
-        let (_, rx) = self.request(json!({
+        let request_msg = json!({
             "type": "fetch",
             "url": url,
             "method": method,
             "headers": headers,
-            "body": body_b64,
-        }))?;
+        });
+        let (_, rx) = match body {
+            Some(bytes) if !bytes.is_empty() => self.request_with_body(request_msg, bytes)?,
+            _ => self.request(request_msg)?,
+        };
         if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
             eprintln!("[dsh-bridge] fetch_full: {url}");
         }
@@ -500,6 +566,19 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                 continue;
             }
             match kind {
+                "status" => {
+                    let stage = msg
+                        .get("stage")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let detail = msg
+                        .get("detail")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    bridge.set_status(&stage, &detail);
+                }
                 "ready" => {
                     let ok = msg.get("ok").and_then(Value::as_bool).unwrap_or(false);
                     let www = msg

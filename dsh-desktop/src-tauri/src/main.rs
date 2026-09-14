@@ -557,6 +557,179 @@ fn run_hot_restart(app: tauri::AppHandle) {
     state.restarting.store(false, Ordering::SeqCst);
 }
 
+/// Retry the host startup from the recovery page: navigate back to the
+/// spinner, spawn a fresh sidecar generation and navigate on settle.
+/// Invoked through `commands::shell_retry_startup`.
+pub fn shell_retry_startup(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.quitting.load(Ordering::SeqCst) {
+        return Err("应用正在退出，无法重试".to_string());
+    }
+    if state.updating.load(Ordering::SeqCst) {
+        return Err("dsh 正在更新，请更新完成后再重试".to_string());
+    }
+    if state
+        .restarting
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("重试已在进行中".to_string());
+    }
+
+    // Back to the spinner first: navigate to the plain loading URL so any
+    // `#error=` hash is cleared and the recovery page shows "正在启动".
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        if let Ok(url) = LOADING_URL.parse::<tauri::Url>() {
+            let _ = window.navigate(url);
+        }
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || run_startup_retry(handle));
+    Ok(())
+}
+
+/// Spawn a fresh sidecar after a failed boot and navigate to the site (or
+/// back to the failure page) once the attempt settles. Mirrors the hot
+/// restart respawn path without the page overlay.
+fn run_startup_retry(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let bridge = state.bridge.clone();
+    let log_path = app
+        .path()
+        .app_log_dir()
+        .ok()
+        .map(|dir| dir.join("dsh-desktop.log"));
+
+    let www_dir = bridge.www_dir().or_else(|| {
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|dir| dir.join("www"))
+    });
+    let Some(www_dir) = www_dir else {
+        state.restarting.store(false, Ordering::SeqCst);
+        return;
+    };
+
+    eprintln!(
+        "dsh-desktop: startup retry initiated (www={})",
+        www_dir.display()
+    );
+
+    bridge.prepare_for_restart();
+    match host::spawn_sidecar(&app, &www_dir) {
+        Ok(mut spawned) => {
+            let stdin = spawned.child.stdin.take();
+            let io = bridge::take_reader_io(&mut spawned.child);
+            if let Some(stdin) = stdin {
+                bridge.attach_stdio(stdin);
+            } else {
+                eprintln!("dsh-desktop: startup retry: host stdin unavailable");
+            }
+            bridge.attach_child(spawned.child);
+            bridge::spawn_reader(bridge.clone(), io, app.clone(), log_path);
+        }
+        Err(error) => {
+            eprintln!("dsh-desktop: startup retry spawn failed: {error}");
+            bridge.set_ready_pedantic(false, Some(error));
+        }
+    }
+
+    let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
+    navigate_to_result(&app, "retry", ready, error, false);
+    state.restarting.store(false, Ordering::SeqCst);
+}
+
+/// Reset from Settings: rebuild the materialized desktop site (www), respawn
+/// the sidecar and navigate on settle. Non-destructive — sessions, plugins
+/// and settings live in the shared profile and are never touched.
+/// Invoked through `commands::shell_reset_runtime`.
+pub fn reset_runtime(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    if state.quitting.load(Ordering::SeqCst) {
+        return Err("应用正在退出，无法重置".to_string());
+    }
+    if state.updating.load(Ordering::SeqCst) {
+        return Err("dsh 正在更新，请更新完成后再重置".to_string());
+    }
+    if state
+        .restarting
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("重置/重启已在进行中".to_string());
+    }
+
+    // Back to the spinner first (same as startup retry).
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        if let Ok(url) = LOADING_URL.parse::<tauri::Url>() {
+            let _ = window.navigate(url);
+        }
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || run_reset_runtime(handle));
+    Ok(())
+}
+
+fn run_reset_runtime(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let bridge = state.bridge.clone();
+    let log_path = app
+        .path()
+        .app_log_dir()
+        .ok()
+        .map(|dir| dir.join("dsh-desktop.log"));
+
+    let www_dir = bridge.www_dir().or_else(|| {
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|dir| dir.join("www"))
+    });
+    let Some(www_dir) = www_dir else {
+        state.restarting.store(false, Ordering::SeqCst);
+        return;
+    };
+
+    eprintln!(
+        "dsh-desktop: runtime reset initiated (www={})",
+        www_dir.display()
+    );
+
+    // Wipe the materialized site; the next boot re-materializes it from the
+    // profile bundles. The profile (sessions/plugins/settings) is untouched.
+    match std::fs::remove_dir_all(&www_dir) {
+        Ok(()) => eprintln!("dsh-desktop: www dir removed"),
+        Err(error) => eprintln!("dsh-desktop: www dir removal: {error}"),
+    }
+    let _ = std::fs::create_dir_all(&www_dir);
+
+    bridge.prepare_for_restart();
+    match host::spawn_sidecar(&app, &www_dir) {
+        Ok(mut spawned) => {
+            let stdin = spawned.child.stdin.take();
+            let io = bridge::take_reader_io(&mut spawned.child);
+            if let Some(stdin) = stdin {
+                bridge.attach_stdio(stdin);
+            } else {
+                eprintln!("dsh-desktop: reset: host stdin unavailable");
+            }
+            bridge.attach_child(spawned.child);
+            bridge::spawn_reader(bridge.clone(), io, app.clone(), log_path);
+        }
+        Err(error) => {
+            eprintln!("dsh-desktop: reset spawn failed: {error}");
+            bridge.set_ready_pedantic(false, Some(error));
+        }
+    }
+
+    let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
+    navigate_to_result(&app, "reset", ready, error, false);
+    state.restarting.store(false, Ordering::SeqCst);
+}
+
 fn log_preamble(app: &tauri::AppHandle, www_dir: &PathBuf, home: &PathBuf) {
     let log = app
         .path()
@@ -615,6 +788,10 @@ fn main() {
             commands::shell_window_geometry,
             commands::shell_toggle_maximize,
             commands::shell_hot_restart,
+            commands::shell_startup_status,
+            commands::shell_retry_startup,
+            commands::shell_reset_runtime,
+            commands::shell_diagnostics,
             updater::shell_check_update,
             updater::shell_dsh_update,
         ])

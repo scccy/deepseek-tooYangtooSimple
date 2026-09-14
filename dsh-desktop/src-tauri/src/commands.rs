@@ -449,3 +449,60 @@ pub fn shell_hot_restart(app: AppHandle) -> Result<String, String> {
     crate::request_hot_restart(&app)?;
     Ok("restarting".to_string())
 }
+
+/// Latest sidecar startup status (`{stage, detail, ready}`) for the recovery
+/// page. Polled by the loading page while the host boots.
+#[tauri::command]
+pub fn shell_startup_status(app: AppHandle) -> Result<String, String> {
+    let state = app.state::<crate::AppState>();
+    let status = state.bridge.status();
+    let ready = state.bridge.ready();
+    Ok(json!({
+        "stage": status.as_ref().map(|s| s.stage.clone()).unwrap_or_else(|| "starting".to_string()),
+        "detail": status.as_ref().map(|s| s.detail.clone()).unwrap_or_default(),
+        "ready": ready.as_ref().map(|r| r.error.is_none()).unwrap_or(false),
+    })
+    .to_string())
+}
+
+/// Retry the host startup from the recovery page (respawns the sidecar and
+/// navigates on settle).
+#[tauri::command]
+pub fn shell_retry_startup(app: AppHandle) -> Result<String, String> {
+    crate::shell_retry_startup(&app)?;
+    Ok("retrying".to_string())
+}
+
+/// Reset the desktop runtime from Settings (rebuild www + respawn the host).
+/// Non-destructive: sessions, plugins and settings under the shared profile
+/// are left untouched.
+#[tauri::command]
+pub fn shell_reset_runtime(app: AppHandle) -> Result<String, String> {
+    crate::reset_runtime(&app)?;
+    Ok("resetting".to_string())
+}
+
+/// Diagnostics for the Settings panel: bridge readiness, last boot error,
+/// sidecar stage and the tail of the app log.
+#[tauri::command]
+pub fn shell_diagnostics(app: AppHandle) -> Result<String, String> {
+    let state = app.state::<crate::AppState>();
+    let ready_info = state.bridge.ready();
+    let status = state.bridge.status();
+    let mut log_tail: Vec<String> = Vec::new();
+    if let Ok(dir) = app.path().app_log_dir() {
+        let path = dir.join("dsh-desktop.log");
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let lines: Vec<&str> = content.lines().rev().take(60).collect();
+            log_tail = lines.into_iter().rev().map(str::to_string).collect();
+        }
+    }
+    Ok(json!({
+        "ready": ready_info.as_ref().map(|r| r.error.is_none()).unwrap_or(false),
+        "error": ready_info.as_ref().and_then(|r| r.error.clone()),
+        "stage": status.as_ref().map(|s| s.stage.clone()).unwrap_or_else(|| "starting".to_string()),
+        "detail": status.as_ref().map(|s| s.detail.clone()).unwrap_or_default(),
+        "log_tail": log_tail,
+    })
+    .to_string())
+}

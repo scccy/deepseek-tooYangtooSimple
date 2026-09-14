@@ -98,16 +98,35 @@ fn shell_probe() -> &'static ShellProbe {
 }
 
 /// The environment background children should inherit. GUI processes get
-/// launchd's bare PATH, so we re-inject what the user actually sees in a
-/// terminal: PATH plus a small whitelist (JAVA_HOME / MAVEN_HOME / proxies).
-/// Secrets the shell may export are deliberately NOT captured — keep the
-/// blast radius of agent subprocesses minimal.
+/// launchd's bare PATH, so we re-inject the environment the user actually
+/// sees in a terminal. By DEFAULT the complete login-shell environment is
+/// captured (all exported variables): JAVA_HOME, MAVEN_HOME, the proxy
+/// family (HTTP(S)_PROXY / ALL_PROXY / NO_PROXY, both cases), PYTHONHOME,
+/// RUSTUP_HOME, CARGO_HOME, … are all just environment variables, and
+/// per-tool whitelists would never end. Secrets are therefore inherited
+/// exactly like a terminal `dsh` run would inherit them; set
+/// DSH_DESKTOP_ENV_MINIMAL=1 to fall back to PATH plus a small safety set
+/// (JAVA_HOME / MAVEN_HOME / proxies) only.
 struct ShellEnv {
     path: Option<String>,
-    java_home: Option<String>,
-    maven_home: Option<String>,
-    http_proxy: Option<String>,
-    https_proxy: Option<String>,
+    /// (name, value) pairs captured from the login shell, excluding PATH.
+    extra: Vec<(String, String)>,
+}
+
+/// Minimal fallback variable set, used only with DSH_DESKTOP_ENV_MINIMAL=1.
+fn minimal_env_names() -> Vec<&'static str> {
+    vec![
+        "JAVA_HOME",
+        "MAVEN_HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ]
 }
 
 static SHELL_ENV: OnceLock<Option<ShellEnv>> = OnceLock::new();
@@ -118,8 +137,10 @@ fn shell_env() -> Option<&'static ShellEnv> {
 
 /// 用交互式登录 shell 读用户真实环境。`-lic` 会连同 .zshrc 一起 source
 /// （很多安装器——conda init / nvm / fnm——把 PATH 写进 .zshrc，非交互的
-/// `-lc` 会漏掉）。每行以 `__DSH_*=` 标记输出，rc 文件里的杂音被过滤掉。
-/// Windows 无此问题（GUI 进程天然继承 user+system 环境变量），返回 None。
+/// `-lc` 会漏掉）。默认把整个 exported 环境以 `KEY=VALUE` 转储并注入；
+/// `DSH_DESKTOP_ENV_MINIMAL=1` 时只读 PATH + 少量安全变量（每个变量一行
+/// `__DSH_V_*__=`，rc 文件里的杂音被过滤掉）。Windows 无此问题（GUI 进程
+/// 天然继承 user+system 环境变量），返回 None。
 fn probe_shell_env() -> Option<ShellEnv> {
     #[cfg(not(unix))]
     {
@@ -128,35 +149,63 @@ fn probe_shell_env() -> Option<ShellEnv> {
     #[cfg(unix)]
     {
         let shell = preferred_shell();
-        let command = r#"printf '__DSH_PATH__=%s\n__DSH_JAVA_HOME__=%s\n__DSH_MAVEN_HOME__=%s\n__DSH_HTTP_PROXY__=%s\n__DSH_HTTPS_PROXY__=%s\n' "$PATH" "$JAVA_HOME" "$MAVEN_HOME" "$HTTP_PROXY" "$HTTPS_PROXY""#;
+        let minimal = crate::envs::is_1("DSH_DESKTOP_ENV_MINIMAL", "DSH_MAC_ENV_MINIMAL");
+        let command = if minimal {
+            let mut names: Vec<String> = vec!["PATH".to_string()];
+            for name in minimal_env_names() {
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+            let format = names
+                .iter()
+                .map(|name| format!("__DSH_V_{name}__=%s\\n"))
+                .collect::<String>();
+            let args = names.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(" ");
+            format!("printf '{format}' {args}")
+        } else {
+            "env | LC_ALL=C sort".to_string()
+        };
         let output = Command::new(&shell).arg("-lic").arg(command).output().ok()?;
         let text = String::from_utf8_lossy(&output.stdout);
         let mut env = ShellEnv {
             path: None,
-            java_home: None,
-            maven_home: None,
-            http_proxy: None,
-            https_proxy: None,
+            extra: Vec::new(),
         };
         for line in text.lines() {
-            let Some((key, value)) = line.trim().split_once('=') else {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
                 continue;
-            };
-            match key {
-                "__DSH_PATH__" => env.path = Some(value.trim().to_string()),
-                "__DSH_JAVA_HOME__" => env.java_home = Some(value.trim().to_string()),
-                "__DSH_MAVEN_HOME__" => env.maven_home = Some(value.trim().to_string()),
-                "__DSH_HTTP_PROXY__" => env.http_proxy = Some(value.trim().to_string()),
-                "__DSH_HTTPS_PROXY__" => env.https_proxy = Some(value.trim().to_string()),
-                _ => {}
+            }
+            if let Some(rest) = trimmed.strip_prefix("__DSH_V_") {
+                let Some((name, value)) = rest.split_once("__=") else {
+                    continue;
+                };
+                let value = value.trim();
+                if name == "PATH" {
+                    env.path = Some(value.to_string());
+                } else if !value.is_empty() {
+                    env.extra.push((name.to_string(), value.to_string()));
+                }
+            } else if !minimal {
+                let Some((name, value)) = trimmed.split_once('=') else {
+                    continue;
+                };
+                let value = value.trim();
+                if name == "PATH" {
+                    env.path = Some(value.to_string());
+                } else if !name.is_empty() && name != "_" && !value.is_empty() {
+                    env.extra.push((name.to_string(), value.to_string()));
+                }
             }
         }
         Some(env)
     }
 }
 
-/// 把登录 shell 的真实环境注入子进程（PATH + 白名单变量）。探测失败时
-/// 什么都不改，保持继承 launchd 环境的原有行为。
+/// 把登录 shell 的真实环境注入子进程（PATH + 白名单变量；全量模式注入
+/// 除 PATH 外的全部变量）。探测失败时什么都不改，保持继承 launchd 环境
+/// 的原有行为。
 fn inject_shell_env(cmd: &mut Command) {
     let Some(env) = shell_env() else {
         return;
@@ -164,14 +213,9 @@ fn inject_shell_env(cmd: &mut Command) {
     if let Some(path) = env.path.as_deref().filter(|p| !p.trim().is_empty()) {
         cmd.env("PATH", path);
     }
-    for (key, value) in [
-        ("JAVA_HOME", env.java_home.as_deref()),
-        ("MAVEN_HOME", env.maven_home.as_deref()),
-        ("HTTP_PROXY", env.http_proxy.as_deref()),
-        ("HTTPS_PROXY", env.https_proxy.as_deref()),
-    ] {
-        if let Some(v) = value.filter(|v| !v.trim().is_empty()) {
-            cmd.env(key, v);
+    for (key, value) in &env.extra {
+        if !value.trim().is_empty() {
+            cmd.env(key, value);
         }
     }
 }

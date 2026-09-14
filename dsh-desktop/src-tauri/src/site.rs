@@ -32,24 +32,73 @@ const LOADING_HTML: &str = r#"<!DOCTYPE html>
     border: 3px solid rgba(255,255,255,.14); border-top-color: #7c8cff;
     animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  #stage { display: none; max-width: 560px; color: #9aa0b5; font-size: 12px;
+    line-height: 1.5; white-space: pre-wrap; text-align: center; }
   #err { display: none; max-width: 560px; color: #ff9a9a; font-size: 13px;
     line-height: 1.6; white-space: pre-wrap; text-align: center; }
+  #retry { display: none; margin-top: 4px; padding: 8px 20px; border: 1px solid #3d4460;
+    border-radius: 6px; background: #1b1f2b; color: #d6d9e8; font-size: 13px;
+    cursor: pointer; }
+  #retry:hover { background: #242a3a; }
+  #retry:disabled { opacity: .55; cursor: default; }
 </style>
 </head>
 <body>
 <div class="box">
   <div class="spinner" id="spin"></div>
   <div id="label">正在启动 DSH Desktop 主机…</div>
+  <div id="stage"></div>
   <div id="err"></div>
+  <button id="retry">重试</button>
 </div>
 <script>
-  if (location.hash.indexOf('#error=') === 0) {
+  var T = window.__TAURI__ && window.__TAURI__.core;
+  var errorHash = location.hash.indexOf('#error=') === 0;
+  function showError() {
     document.getElementById('spin').style.display = 'none';
     document.getElementById('label').textContent = '启动失败';
     var e = document.getElementById('err');
     e.style.display = 'block';
     e.textContent = decodeURIComponent(location.hash.slice(7));
+    document.getElementById('retry').style.display = 'inline-block';
   }
+  function renderStatus(s) {
+    var el = document.getElementById('stage');
+    if (!el) return;
+    if (s && s.stage && s.stage !== 'ready') {
+      el.style.display = 'block';
+      el.textContent = '阶段：' + s.stage + (s.detail ? ' — ' + s.detail : '');
+    } else {
+      el.style.display = 'none';
+    }
+  }
+  function poll() {
+    if (!T || errorHash) return;
+    T.invoke('shell_startup_status').then(function (raw) {
+      try {
+        renderStatus(typeof raw === 'string' ? JSON.parse(raw) : raw);
+      } catch (e) {}
+    }).catch(function () {});
+  }
+  if (errorHash) {
+    showError();
+  } else {
+    setInterval(poll, 250);
+    poll();
+  }
+  document.getElementById('retry').onclick = function () {
+    if (!T) { location.hash = ''; location.reload(); return; }
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = '正在重试…';
+    T.invoke('shell_retry_startup').catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = '重试';
+      var err = document.getElementById('err');
+      err.style.display = 'block';
+      err.textContent = '重试失败：' + String(e);
+    });
+  };
 </script>
 </body>
 </html>

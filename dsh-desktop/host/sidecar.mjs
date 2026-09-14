@@ -90,7 +90,7 @@ const HOME_PATCH_PATH = () => join(resolveDshHome(), PROFILE_PATCH_FILENAME);
 // without an app version bump.
 const ABOUT_PACKAGE = '@dsh-desktop/desktop-about';
 const ABOUT_VERSION = (dshenv('DSH_DESKTOP_APP_VERSION', 'DSH_MAC_APP_VERSION') ?? '0.0.0').trim() || '0.0.0';
-const ABOUT_BUNDLE_REVISION = 5;
+const ABOUT_BUNDLE_REVISION = 6;
 const ABOUT_CLIENT_TEMPLATE = (versionJson) => `window.__ModuleLoader__.load({
   id: ${JSON.stringify(ABOUT_PACKAGE)},
   factory: (require) => {
@@ -326,6 +326,102 @@ const ABOUT_CLIENT_TEMPLATE = (versionJson) => `window.__ModuleLoader__.load({
         }, busy ? "重启中…" : "立即重启")
       );
     }
+    function DiagnosticsRow() {
+      var dataState = react.useState(null);
+      var data = dataState[0];
+      var setData = dataState[1];
+      var expandedState = react.useState(false);
+      var expanded = expandedState[0];
+      var setExpanded = expandedState[1];
+      var copyState = react.useState("复制");
+      var copy = copyState[0];
+      var setCopy = copyState[1];
+      function refresh() {
+        invokeNative("shell_diagnostics").then(function (raw) {
+          try {
+            setData(typeof raw === "string" ? JSON.parse(raw) : raw);
+          } catch (e) {
+            setData({ error: String(e) });
+          }
+        }, function (error) {
+          setData({ error: error && error.message ? error.message : String(error) });
+        });
+      }
+      react.useEffect(function () { refresh(); }, []);
+      function summary() {
+        if (!data) return "读取中…";
+        var parts = ["主机就绪：" + (data.ready === true ? "是" : data.ready === false ? "否" : "未知")];
+        if (data.stage) parts.push("阶段：" + data.stage);
+        if (data.error) parts.push("错误：" + data.error);
+        return parts.join(" · ");
+      }
+      function detailText() {
+        return JSON.stringify(data, null, 2);
+      }
+      function onCopy() {
+        var text = detailText();
+        var p = navigator.clipboard && navigator.clipboard.writeText
+          ? navigator.clipboard.writeText(text)
+          : Promise.reject(new Error("clipboard unavailable"));
+        p.then(function () {
+          setCopy("已复制");
+          setTimeout(function () { setCopy("复制"); }, 1600);
+        }, function () { setCopy("复制失败"); });
+      }
+      var preStyle = {
+        width: "100%", maxHeight: "240px", overflow: "auto", margin: "0",
+        padding: "10px", border: "1px solid var(--dsw-alias-border-l2)",
+        borderRadius: "8px", background: "var(--dsw-alias-bg-layer-2)",
+        color: "var(--dsw-alias-label-secondary)", fontSize: "12px",
+        lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-all"
+      };
+      return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start", flexDirection: "column" }) },
+        react.createElement("div", { style: { display: "flex", width: "100%", alignItems: "flex-start", justifyContent: "space-between" } },
+          react.createElement("div", { style: textWrapStyle },
+            react.createElement("div", { style: titleStyle }, "诊断 / Diagnostics"),
+            react.createElement("div", { style: hintStyle }, summary())
+          ),
+          react.createElement("div", { style: { display: "flex", flexShrink: 0, marginLeft: "16px", gap: "8px" } },
+            react.createElement("button", { style: buttonStyle(false), onClick: refresh }, "刷新"),
+            react.createElement("button", { style: buttonStyle(false), onClick: function () { setExpanded(!expanded); } }, expanded ? "收起" : "展开"),
+            react.createElement("button", { style: buttonStyle(false), onClick: onCopy }, copy)
+          )
+        ),
+        expanded ? react.createElement("pre", { style: preStyle }, detailText()) : null
+      );
+    }
+    function ResetRuntimeRow() {
+      var busyState = react.useState(false);
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+      var messageState = react.useState("");
+      var message = messageState[0];
+      var setMessage = messageState[1];
+      function onReset() {
+        if (busy) return;
+        if (!window.confirm("重置会重建桌面站点资源（www）并重启本机主机；不会删除会话、插件或设置。继续？")) return;
+        setBusy(true);
+        setMessage("正在重置…");
+        invokeNative("shell_reset_runtime").then(function () {
+          setMessage("重置完成，主机正在重启，页面将在准备好后自动重载。");
+        }, function (error) {
+          setBusy(false);
+          setMessage("重置失败：" + (error && error.message ? error.message : String(error)));
+        });
+      }
+      var dangerBorder = { borderColor: "var(--dsw-alias-border-danger, #c96a6a)" };
+      return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start" }) },
+        react.createElement("div", { style: textWrapStyle },
+          react.createElement("div", { style: titleStyle }, "重置并修复 / Reset & repair"),
+          react.createElement("div", { style: hintStyle }, message.length > 0 ? message : "重建桌面站点资源并重启主机，用于修复异常启动或损坏的站点缓存；不会删除会话、插件或设置。")
+        ),
+        react.createElement("button", {
+          style: Object.assign({}, buttonStyle(busy), dangerBorder),
+          disabled: busy,
+          onClick: onReset
+        }, busy ? "重置中…" : "重置")
+      );
+    }
     function apply(ctx) {
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
@@ -342,6 +438,16 @@ const ABOUT_CLIENT_TEMPLATE = (versionJson) => `window.__ModuleLoader__.load({
         id: "desktop-hot-restart",
         order: 950
       }, HotRestartRow));
+      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+        name: "settings.general.item",
+        id: "desktop-diagnostics",
+        order: 960
+      }, DiagnosticsRow));
+      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+        name: "settings.general.item",
+        id: "desktop-reset",
+        order: 970
+      }, ResetRuntimeRow));
     }
     exports.apply = apply;
     exports.inject = inject;
@@ -421,6 +527,11 @@ for (const key of ['log', 'info', 'warn', 'error', 'debug']) {
 
 function frame(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
+}
+
+/** Startup/lifecycle status for the Rust recovery page (stage + detail). */
+function statusFrame(stage, detail) {
+  frame({ type: 'status', stage, detail: String(detail ?? '') });
 }
 
 /**
@@ -1003,7 +1114,9 @@ function handleFetch(msg) {
   const body =
     msg.body === undefined || msg.body === null || msg.body === ''
       ? null
-      : Buffer.from(msg.body, 'base64');
+      : Buffer.isBuffer(msg.body)
+        ? msg.body
+        : Buffer.from(msg.body, 'base64');
   const headers = sanitizeHeaders(msg.headers);
   // dsh >= 0.1.2-rc.1: /api/* routes sit behind BrowserAuth — a launch-token
   // query on `/` mints an authority-bound session cookie, and unauthenticated
@@ -1288,6 +1401,7 @@ function installNotificationPumps() {
 // ---------------------------------------------------------------------------
 let ctx = null;
 let notificationDispose = null;
+let exiting = false;
 
 function handleMessage(line) {
   if (line.trim() === '') return;
@@ -1333,9 +1447,12 @@ function handleMessage(line) {
 
 async function main() {
   try {
+    statusFrame('boot', 'loading profile');
     ctx = await bootHost();
+    statusFrame('boot', 'profile ready');
   } catch (error) {
     console.error('[host] boot failed:', error);
+    statusFrame('failed', String(error?.stack ?? error));
     frame({ type: 'ready', ok: false, error: String(error?.stack ?? error) });
     return;
   }
@@ -1343,8 +1460,10 @@ async function main() {
   try {
     const clientModules = ctx.get('clientModules');
     if (clientModules === undefined) throw new Error('client-modules row not mounted');
+    statusFrame('site', 'materializing www');
     const site = prepareSite({ webServer, clientModules, wwwDir: WWW_DIR });
     notificationDispose = installNotificationPumps();
+    statusFrame('ready', 'host ready');
     frame({
       type: 'ready',
       ok: true,
@@ -1357,16 +1476,67 @@ async function main() {
     console.error(`[host] portless bridge ready (profile=${NAME}, www=${WWW_DIR})`);
   } catch (error) {
     console.error('[host] site preparation failed:', error);
+    statusFrame('failed', String(error?.stack ?? error));
     frame({ type: 'ready', ok: false, error: String(error?.stack ?? error) });
     return;
   }
 
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  lines.on('line', handleMessage);
-  lines.on('close', () => void shutdown('bridge stdin closed'));
+  // ── framed stdin parser ──────────────────────────────────────────────
+  // The Rust shell writes one JSON header line per message; a header that
+  // carries `bodyLen` is followed by exactly `bodyLen` raw bytes (request
+  // chunk-bin), so large upload bodies never cross the bridge as base64.
+  // A force-killed shell surfaces as EOF (`end`/`close`), which shuts the
+  // host down exactly like the previous readline loop did.
+  let pending = null;
+  let received = Buffer.alloc(0);
+  function pump() {
+    for (;;) {
+      if (pending === null) {
+        const nl = received.indexOf(0x0a);
+        if (nl === -1) break;
+        const line = received.subarray(0, nl).toString('utf8');
+        received = received.subarray(nl + 1);
+        if (line.trim() === '') continue;
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          console.error(`[host] bad bridge frame: ${line.slice(0, 200)}`);
+          continue;
+        }
+        const bodyLen = msg.bodyLen;
+        if (typeof bodyLen === 'number' && bodyLen > 0) {
+          pending = { msg, body: Buffer.allocUnsafe(bodyLen), filled: 0 };
+        } else {
+          handleMessage(msg);
+        }
+      } else {
+        const need = pending.msg.bodyLen - pending.filled;
+        if (received.length === 0) break;
+        const take = Math.min(need, received.length);
+        received.copy(pending.body, pending.filled, 0, take);
+        received = received.subarray(take);
+        pending.filled += take;
+        if (pending.filled === pending.msg.bodyLen) {
+          const { msg, body } = pending;
+          pending = null;
+          msg.body = body;
+          delete msg.bodyLen;
+          handleMessage(msg);
+        }
+      }
+    }
+  }
+  process.stdin.on('data', (chunk) => {
+    received = received.length === 0 ? chunk : Buffer.concat([received, chunk]);
+    pump();
+  });
+  process.stdin.on('close', () => void shutdown('bridge stdin closed'));
 }
 
 async function shutdown(reason) {
+  if (exiting) return;
+  exiting = true;
   console.error(`[host] ${reason}; disposing host`);
   try {
     notificationDispose?.();
