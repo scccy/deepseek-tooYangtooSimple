@@ -15,12 +15,13 @@
 mod bridge;
 mod commands;
 mod host;
+mod notify;
 mod site;
 mod envs;
 mod updater;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -508,6 +509,39 @@ pub fn request_hot_restart(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Respawn the sidecar in place and navigate the WebView once the new host
+/// settles (or back to the failure page). Shared by hot restart, startup
+/// retry and runtime reset — the single maintained respawn path.
+fn respawn_host(
+    app: &tauri::AppHandle,
+    bridge: &Arc<Bridge>,
+    www_dir: &Path,
+    phase: &str,
+    cache_bust: bool,
+    log_path: Option<PathBuf>,
+) {
+    bridge.prepare_for_restart();
+    match host::spawn_sidecar(app, www_dir) {
+        Ok(mut spawned) => {
+            let stdin = spawned.child.stdin.take();
+            let io = bridge::take_reader_io(&mut spawned.child);
+            if let Some(stdin) = stdin {
+                bridge.attach_stdio(stdin);
+            } else {
+                eprintln!("dsh-desktop: {phase}: host stdin unavailable");
+            }
+            bridge.attach_child(spawned.child);
+            bridge::spawn_reader(bridge.clone(), io, app.clone(), log_path);
+        }
+        Err(error) => {
+            eprintln!("dsh-desktop: {phase} spawn failed: {error}");
+            bridge.set_ready_failed(error);
+        }
+    }
+    let (ready, error) = wait_for_bridge(bridge, Duration::from_secs(45));
+    navigate_to_result(app, phase, ready, error, cache_bust);
+}
+
 fn run_hot_restart(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
     let bridge = state.bridge.clone();
@@ -533,27 +567,7 @@ fn run_hot_restart(app: tauri::AppHandle) {
         www_dir.display()
     );
 
-    bridge.prepare_for_restart();
-    match host::spawn_sidecar(&app, &www_dir) {
-        Ok(mut spawned) => {
-            let stdin = spawned.child.stdin.take();
-            let io = bridge::take_reader_io(&mut spawned.child);
-            if let Some(stdin) = stdin {
-                bridge.attach_stdio(stdin);
-            } else {
-                eprintln!("dsh-desktop: hot restart: host stdin unavailable");
-            }
-            bridge.attach_child(spawned.child);
-            bridge::spawn_reader(bridge.clone(), io, app.clone(), log_path);
-        }
-        Err(error) => {
-            eprintln!("dsh-desktop: hot restart spawn failed: {error}");
-            bridge.set_ready_pedantic(false, Some(error));
-        }
-    }
-
-    let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
-    navigate_to_result(&app, "hot restart", ready, error, true);
+    respawn_host(&app, &bridge, &www_dir, "hot restart", true, log_path);
     state.restarting.store(false, Ordering::SeqCst);
 }
 
@@ -617,27 +631,7 @@ fn run_startup_retry(app: tauri::AppHandle) {
         www_dir.display()
     );
 
-    bridge.prepare_for_restart();
-    match host::spawn_sidecar(&app, &www_dir) {
-        Ok(mut spawned) => {
-            let stdin = spawned.child.stdin.take();
-            let io = bridge::take_reader_io(&mut spawned.child);
-            if let Some(stdin) = stdin {
-                bridge.attach_stdio(stdin);
-            } else {
-                eprintln!("dsh-desktop: startup retry: host stdin unavailable");
-            }
-            bridge.attach_child(spawned.child);
-            bridge::spawn_reader(bridge.clone(), io, app.clone(), log_path);
-        }
-        Err(error) => {
-            eprintln!("dsh-desktop: startup retry spawn failed: {error}");
-            bridge.set_ready_pedantic(false, Some(error));
-        }
-    }
-
-    let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
-    navigate_to_result(&app, "retry", ready, error, false);
+    respawn_host(&app, &bridge, &www_dir, "retry", false, log_path);
     state.restarting.store(false, Ordering::SeqCst);
 }
 
@@ -706,27 +700,7 @@ fn run_reset_runtime(app: tauri::AppHandle) {
     }
     let _ = std::fs::create_dir_all(&www_dir);
 
-    bridge.prepare_for_restart();
-    match host::spawn_sidecar(&app, &www_dir) {
-        Ok(mut spawned) => {
-            let stdin = spawned.child.stdin.take();
-            let io = bridge::take_reader_io(&mut spawned.child);
-            if let Some(stdin) = stdin {
-                bridge.attach_stdio(stdin);
-            } else {
-                eprintln!("dsh-desktop: reset: host stdin unavailable");
-            }
-            bridge.attach_child(spawned.child);
-            bridge::spawn_reader(bridge.clone(), io, app.clone(), log_path);
-        }
-        Err(error) => {
-            eprintln!("dsh-desktop: reset spawn failed: {error}");
-            bridge.set_ready_pedantic(false, Some(error));
-        }
-    }
-
-    let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
-    navigate_to_result(&app, "reset", ready, error, false);
+    respawn_host(&app, &bridge, &www_dir, "reset", false, log_path);
     state.restarting.store(false, Ordering::SeqCst);
 }
 
@@ -792,6 +766,8 @@ fn main() {
             commands::shell_retry_startup,
             commands::shell_reset_runtime,
             commands::shell_diagnostics,
+            commands::shell_get_notify_prefs,
+            commands::shell_set_notify_prefs,
             updater::shell_check_update,
             updater::shell_dsh_update,
         ])
@@ -832,12 +808,16 @@ fn main() {
                 }
                 Err(error) => {
                     eprintln!("dsh-desktop: {error}");
-                    bridge.set_ready_pedantic(false, Some(error));
+                    bridge.set_ready_failed(error);
                 }
             }
 
             // Notification Center requires an explicit, user-approved
             // permission grant; without this the first alerts never surface.
+            // On macOS the Tauri plugin never actually prompts, so go straight
+            // to UNUserNotificationCenter (registers the foreground-present
+            // delegate and requests authorization once) instead.
+            notify::setup();
             match app.notification().request_permission() {
                 Ok(permission) => {
                     eprintln!("dsh-desktop: notification permission: {permission:?}")

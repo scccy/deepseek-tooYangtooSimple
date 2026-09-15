@@ -11,9 +11,8 @@
  * stdout is reserved for the NDJSON bridge protocol. All human logs go to
  * stderr (the Rust shell forwards them to the app log file).
  */
-import { createInterface } from 'node:readline';
 import { createRequire } from 'node:module';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -21,6 +20,7 @@ import { format } from 'node:util';
 
 import { createIpcWebServer } from './ipc-web-server.mjs';
 import { createDesktopPnpmService, createDesktopProfilesService } from './desktop-pnpm.mjs';
+import { renderAboutClient } from './desktop-about-template.mjs';
 import {
   OP_BINARY,
   OP_PING,
@@ -90,372 +90,7 @@ const HOME_PATCH_PATH = () => join(resolveDshHome(), PROFILE_PATCH_FILENAME);
 // without an app version bump.
 const ABOUT_PACKAGE = '@dsh-desktop/desktop-about';
 const ABOUT_VERSION = (dshenv('DSH_DESKTOP_APP_VERSION', 'DSH_MAC_APP_VERSION') ?? '0.0.0').trim() || '0.0.0';
-const ABOUT_BUNDLE_REVISION = 6;
-const ABOUT_CLIENT_TEMPLATE = (versionJson) => `window.__ModuleLoader__.load({
-  id: ${JSON.stringify(ABOUT_PACKAGE)},
-  factory: (require) => {
-    let react = require("react");
-    var module = { exports: {} };
-    var exports = module.exports;
-    var VERSION = ${versionJson};
-    var inject = ["slots"];
-    var rowStyle = {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "16px 0",
-      borderBottom: "1px solid var(--dsw-alias-border-l2)"
-    };
-    var titleStyle = {
-      color: "var(--dsw-alias-label-primary)",
-      fontSize: "14px",
-      lineHeight: "22px"
-    };
-    var valueStyle = {
-      color: "var(--dsw-alias-label-secondary)",
-      fontVariantNumeric: "tabular-nums",
-      fontSize: "14px",
-      lineHeight: "22px"
-    };
-    var textWrapStyle = {
-      display: "flex",
-      flexDirection: "column",
-      gap: "4px",
-      minWidth: 0,
-      paddingRight: "16px"
-    };
-    var hintStyle = {
-      color: "var(--dsw-alias-label-secondary)",
-      fontSize: "12px",
-      lineHeight: "18px",
-      whiteSpace: "pre-wrap"
-    };
-    var buttonBaseStyle = {
-      flexShrink: 0,
-      marginLeft: "16px",
-      padding: "5px 14px",
-      borderRadius: "8px",
-      border: "1px solid var(--dsw-alias-border-l2)",
-      background: "var(--dsw-alias-bg-layer-2)",
-      color: "var(--dsw-alias-label-primary)",
-      fontSize: "13px",
-      lineHeight: "20px"
-    };
-    function buttonStyle(busy) {
-      return Object.assign({}, buttonBaseStyle, {
-        cursor: busy ? "progress" : "pointer",
-        opacity: busy ? 0.55 : 1
-      });
-    }
-    function invokeNative(cmd, args) {
-      var api = window.__TAURI__;
-      if (api === undefined || api.core === undefined || typeof api.core.invoke !== "function") {
-        return Promise.reject(new Error("desktop bridge unavailable"));
-      }
-      return api.core.invoke(cmd, args || {});
-    }
-    function listenNative(event, handler) {
-      var api = window.__TAURI__;
-      if (api !== undefined && api.event !== undefined && typeof api.event.listen === "function") {
-        return api.event.listen(event, handler);
-      }
-      return Promise.resolve(function () {});
-    }
-    function VersionRow() {
-      return react.createElement("div", { style: rowStyle },
-        react.createElement("div", { style: titleStyle }, "桌面版版本 / Desktop version"),
-        react.createElement("div", { style: valueStyle }, "v" + VERSION)
-      );
-    }
-    function DshUpdateRow() {
-      var infoState = react.useState(null);
-      var info = infoState[0];
-      var setInfo = infoState[1];
-      var checkingState = react.useState(false);
-      var checking = checkingState[0];
-      var setChecking = checkingState[1];
-      var busyState = react.useState(false);
-      var busy = busyState[0];
-      var setBusy = busyState[1];
-      var tailState = react.useState([]);
-      var tail = tailState[0];
-      var setTail = tailState[1];
-      var statusState = react.useState("");
-      var status = statusState[0];
-      var setStatus = statusState[1];
-
-      function refresh(force) {
-        if (checking) return;
-        setChecking(true);
-        invokeNative("shell_check_update", { force: force === true }).then(function (result) {
-          setInfo(result && typeof result === "object" ? result : {});
-        }, function (error) {
-          setInfo({ error: error && error.message ? error.message : String(error) });
-        }).finally(function () {
-          setChecking(false);
-        });
-      }
-      react.useEffect(function () {
-        refresh(false);
-      }, []);
-
-      react.useEffect(function () {
-        var unlisten = null;
-        var active = true;
-        listenNative("dsh:update-progress", function (event) {
-          if (!active) return;
-          var payload = event && event.payload ? event.payload : {};
-          if (payload.phase === "done") {
-            setBusy(false);
-            setStatus(payload.line ? String(payload.line) : "更新完成");
-          } else if (payload.phase === "error") {
-            setBusy(false);
-            setStatus("失败：" + (payload.line ? String(payload.line) : "未知错误"));
-          } else {
-            setBusy(true);
-            if (payload.line) {
-              var line = String(payload.line);
-              setTail(function (prev) {
-                var next = prev.concat([line]);
-                if (next.length > 4) next = next.slice(next.length - 4);
-                return next;
-              });
-            }
-          }
-        }).then(function (fn) {
-          unlisten = fn;
-          if (!active && typeof fn === "function") fn();
-        });
-        return function () {
-          active = false;
-          if (unlisten && typeof unlisten === "function") unlisten();
-        };
-      }, []);
-
-      function onUpdate() {
-        if (busy) return;
-        setBusy(true);
-        setStatus("");
-        setTail([]);
-        invokeNative("shell_dsh_update").then(function () {
-          // progress arrives via dsh:update-progress; the host then restarts.
-        }, function (error) {
-          setBusy(false);
-          setStatus("失败：" + (error && error.message ? error.message : String(error)));
-        });
-      }
-
-      var localLabel = info && info.localVersion ? "v" + info.localVersion : (checking ? "检测中…" : "未读取");
-      var latestLabel = info && info.latestVersion ? "v" + info.latestVersion : "—";
-      var versionStatus = "";
-      if (info && info.error) {
-        versionStatus = String(info.error);
-      } else if (info && info.updateAvailable) {
-        versionStatus = "发现新版本，可更新";
-      } else if (info && info.localVersion && info.latestVersion) {
-        versionStatus = "已是最新";
-      }
-      var versionLine = "本地 " + localLabel;
-      if (info && info.latestVersion) {
-        versionLine = versionLine + " · 仓库 " + latestLabel;
-      }
-      if (versionStatus) {
-        versionLine = versionLine + " · " + versionStatus;
-      }
-
-      var actionLine = status;
-      if (!actionLine && tail.length > 0) {
-        actionLine = tail.join(" · ");
-      }
-
-      var buttonsStyle = {
-        flexShrink: 0,
-        marginLeft: "16px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        alignItems: "stretch"
-      };
-      return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start" }) },
-        react.createElement("div", { style: textWrapStyle },
-          react.createElement("div", { style: titleStyle }, "dsh 版本与更新 / DSH version & update"),
-          react.createElement("div", { style: hintStyle }, versionLine),
-          actionLine ? react.createElement("div", { style: hintStyle }, actionLine) : null
-        ),
-        react.createElement("div", { style: buttonsStyle },
-          react.createElement("button", {
-            style: buttonStyle(busy),
-            disabled: busy,
-            onClick: onUpdate
-          }, busy ? "更新中…" : "更新 dsh"),
-          react.createElement("button", {
-            style: buttonStyle(checking),
-            disabled: checking,
-            onClick: function () { refresh(true); }
-          }, checking ? "检测中…" : "检测更新")
-        )
-      );
-    }
-    function HotRestartRow() {
-      var busyState = react.useState(false);
-      var busy = busyState[0];
-      var setBusy = busyState[1];
-      var messageState = react.useState("");
-      var message = messageState[0];
-      var setMessage = messageState[1];
-      function onHotRestart() {
-        if (busy) return;
-        setBusy(true);
-        setMessage("正在请求热重启…");
-        invokeNative("shell_hot_restart").then(function () {
-          setMessage("主机正在重启，页面将在准备好后自动重载。");
-        }, function (error) {
-          setBusy(false);
-          setMessage("热重启失败：" + (error && error.message ? error.message : String(error)));
-        });
-      }
-      return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start" }) },
-        react.createElement("div", { style: textWrapStyle },
-          react.createElement("div", { style: titleStyle }, "热重启 / Hot restart"),
-          react.createElement("div", { style: hintStyle }, message.length > 0 ? message : "不移动、不关闭窗口：重启本机主机进程并重新加载界面；进行中的会话会结束。")
-        ),
-        react.createElement("button", {
-          style: buttonStyle(busy),
-          disabled: busy,
-          onClick: onHotRestart
-        }, busy ? "重启中…" : "立即重启")
-      );
-    }
-    function DiagnosticsRow() {
-      var dataState = react.useState(null);
-      var data = dataState[0];
-      var setData = dataState[1];
-      var expandedState = react.useState(false);
-      var expanded = expandedState[0];
-      var setExpanded = expandedState[1];
-      var copyState = react.useState("复制");
-      var copy = copyState[0];
-      var setCopy = copyState[1];
-      function refresh() {
-        invokeNative("shell_diagnostics").then(function (raw) {
-          try {
-            setData(typeof raw === "string" ? JSON.parse(raw) : raw);
-          } catch (e) {
-            setData({ error: String(e) });
-          }
-        }, function (error) {
-          setData({ error: error && error.message ? error.message : String(error) });
-        });
-      }
-      react.useEffect(function () { refresh(); }, []);
-      function summary() {
-        if (!data) return "读取中…";
-        var parts = ["主机就绪：" + (data.ready === true ? "是" : data.ready === false ? "否" : "未知")];
-        if (data.stage) parts.push("阶段：" + data.stage);
-        if (data.error) parts.push("错误：" + data.error);
-        return parts.join(" · ");
-      }
-      function detailText() {
-        return JSON.stringify(data, null, 2);
-      }
-      function onCopy() {
-        var text = detailText();
-        var p = navigator.clipboard && navigator.clipboard.writeText
-          ? navigator.clipboard.writeText(text)
-          : Promise.reject(new Error("clipboard unavailable"));
-        p.then(function () {
-          setCopy("已复制");
-          setTimeout(function () { setCopy("复制"); }, 1600);
-        }, function () { setCopy("复制失败"); });
-      }
-      var preStyle = {
-        width: "100%", maxHeight: "240px", overflow: "auto", margin: "0",
-        padding: "10px", border: "1px solid var(--dsw-alias-border-l2)",
-        borderRadius: "8px", background: "var(--dsw-alias-bg-layer-2)",
-        color: "var(--dsw-alias-label-secondary)", fontSize: "12px",
-        lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-all"
-      };
-      return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start", flexDirection: "column" }) },
-        react.createElement("div", { style: { display: "flex", width: "100%", alignItems: "flex-start", justifyContent: "space-between" } },
-          react.createElement("div", { style: textWrapStyle },
-            react.createElement("div", { style: titleStyle }, "诊断 / Diagnostics"),
-            react.createElement("div", { style: hintStyle }, summary())
-          ),
-          react.createElement("div", { style: { display: "flex", flexShrink: 0, marginLeft: "16px", gap: "8px" } },
-            react.createElement("button", { style: buttonStyle(false), onClick: refresh }, "刷新"),
-            react.createElement("button", { style: buttonStyle(false), onClick: function () { setExpanded(!expanded); } }, expanded ? "收起" : "展开"),
-            react.createElement("button", { style: buttonStyle(false), onClick: onCopy }, copy)
-          )
-        ),
-        expanded ? react.createElement("pre", { style: preStyle }, detailText()) : null
-      );
-    }
-    function ResetRuntimeRow() {
-      var busyState = react.useState(false);
-      var busy = busyState[0];
-      var setBusy = busyState[1];
-      var messageState = react.useState("");
-      var message = messageState[0];
-      var setMessage = messageState[1];
-      function onReset() {
-        if (busy) return;
-        if (!window.confirm("重置会重建桌面站点资源（www）并重启本机主机；不会删除会话、插件或设置。继续？")) return;
-        setBusy(true);
-        setMessage("正在重置…");
-        invokeNative("shell_reset_runtime").then(function () {
-          setMessage("重置完成，主机正在重启，页面将在准备好后自动重载。");
-        }, function (error) {
-          setBusy(false);
-          setMessage("重置失败：" + (error && error.message ? error.message : String(error)));
-        });
-      }
-      var dangerBorder = { borderColor: "var(--dsw-alias-border-danger, #c96a6a)" };
-      return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start" }) },
-        react.createElement("div", { style: textWrapStyle },
-          react.createElement("div", { style: titleStyle }, "重置并修复 / Reset & repair"),
-          react.createElement("div", { style: hintStyle }, message.length > 0 ? message : "重建桌面站点资源并重启主机，用于修复异常启动或损坏的站点缓存；不会删除会话、插件或设置。")
-        ),
-        react.createElement("button", {
-          style: Object.assign({}, buttonStyle(busy), dangerBorder),
-          disabled: busy,
-          onClick: onReset
-        }, busy ? "重置中…" : "重置")
-      );
-    }
-    function apply(ctx) {
-      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-        name: "settings.general.item",
-        id: "desktop-version",
-        order: 900
-      }, VersionRow));
-      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-        name: "settings.general.item",
-        id: "desktop-dsh-update",
-        order: 910
-      }, DshUpdateRow));
-      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-        name: "settings.general.item",
-        id: "desktop-hot-restart",
-        order: 950
-      }, HotRestartRow));
-      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-        name: "settings.general.item",
-        id: "desktop-diagnostics",
-        order: 960
-      }, DiagnosticsRow));
-      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
-        name: "settings.general.item",
-        id: "desktop-reset",
-        order: 970
-      }, ResetRuntimeRow));
-    }
-    exports.apply = apply;
-    exports.inject = inject;
-    exports.name = ${JSON.stringify(ABOUT_PACKAGE)};
-    return module.exports;
-  }
-});
-`;
+const ABOUT_BUNDLE_REVISION = 12;
 
 /** Write/refresh the desktop settings client bundle under the profile. */
 function ensureDesktopAboutBundle(profileDir) {
@@ -496,7 +131,7 @@ function ensureDesktopAboutBundle(profileDir) {
     },
   }, null, 2)}\n`, 'utf8');
   writeFileSync(join(pkgDir, 'lib', 'index.js'), `export const name = ${JSON.stringify(ABOUT_PACKAGE)};\nexport function apply() {}\n`, 'utf8');
-  writeFileSync(clientPath, ABOUT_CLIENT_TEMPLATE(JSON.stringify(ABOUT_VERSION)), 'utf8');
+  writeFileSync(clientPath, renderAboutClient(JSON.stringify(ABOUT_VERSION)), 'utf8');
 }
 
 /** Desktop overlay: HTTP out, IPC in (same shape as the Windows carrier). */
@@ -515,13 +150,10 @@ const DESKTOP_PATCHES = [
   { insert: [{ id: 'desktop-version', name: ABOUT_PACKAGE }] },
 ];
 
-const MUX_EVENTS_PATH = '/api/events.mux';
-const HOST_EVENTS_PATH = '/api/events.host';
 const MAX_WS_SEND_BYTES = 1 << 20;
 
 // Keep stdout clean: the parent Rust shell treats stdout as NDJSON only.
 for (const key of ['log', 'info', 'warn', 'error', 'debug']) {
-  const fn = console[key].bind(console);
   console[key] = (...args) => process.stderr.write(`${format(...args)}\n`);
 }
 
@@ -542,25 +174,6 @@ function statusFrame(stage, detail) {
 function frameBinChunk(id, chunk) {
   process.stdout.write(`${JSON.stringify({ type: 'chunk-bin', id, len: chunk.byteLength })}\n`);
   process.stdout.write(chunk);
-}
-
-function serverRequest(framePayload) {
-  return {
-    type: 'server-request',
-    rpcId: framePayload.rpcId,
-    method: framePayload.payload.type,
-    payload: framePayload.payload,
-  };
-}
-
-function failureFrame(error) {
-  return {
-    rpcId: randomUUID(),
-    payload: {
-      type: 'stream/error',
-      error: { code: 'internal', message: String(error), details: {} },
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -832,7 +445,6 @@ function createMockRequest({ url, method, headers, body }) {
 }
 
 function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
-  const listeners = new Map();
   // Header storage mirrors node:http's case-insensitive namespace:
   // `_headers` keeps the ORIGINAL key casing (what goes on the wire / into
   // the headers frame, so existing writeHead flows stay byte-identical),
@@ -849,6 +461,7 @@ function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
     }
   };
   const res = {
+    ...mockEventTarget(),
     statusCode: 200,
     headersSent: false,
     writableEnded: false,
@@ -954,34 +567,10 @@ function createMockResponse({ onChunk, onHeaders, onEnd } = {}) {
       }
       onEnd?.();
     },
-    on(event, fn) {
-      if (!listeners.has(event)) listeners.set(event, new Set());
-      listeners.get(event).add(fn);
-      return res;
-    },
-    once(event, fn) {
-      const wrapped = (...args) => {
-        res.off(event, wrapped);
-        fn(...args);
-      };
-      return res.on(event, wrapped);
-    },
-    off(event, fn) {
-      listeners.get(event)?.delete(fn);
-      return res;
-    },
-    removeAllListeners(event) {
-      if (event === undefined) listeners.clear();
-      else listeners.delete(event);
-      return res;
-    },
-    _emit(event, ...args) {
-      for (const fn of [...(listeners.get(event) ?? [])]) fn(...args);
-    },
     destroy() {
       if (res.writableEnded || res.destroyed) return;
       res.destroyed = true;
-      res._emit('close');
+      res.emit('close');
       onEnd?.();
     },
   };
@@ -1172,7 +761,6 @@ function handleFetchAbort(msg) {
 // ---------------------------------------------------------------------------
 // WebSocket sessions
 // ---------------------------------------------------------------------------
-const wsPumps = new Map();
 const wsSessions = new Map();
 
 function sendWsFrame(streamId, data) {
@@ -1189,32 +777,6 @@ function sendWsFrame(streamId, data) {
 
 function sendWsClosed(streamId, code, reason) {
   frame({ type: 'ws-frame', streamId, closed: true, code: code ?? 1006, reason: reason ?? '' });
-}
-
-function openEventsPump(msg, path) {
-  const apiProxy = ctx.get('apiProxy');
-  if (apiProxy === undefined) return { ok: false, reason: 'no api gateway' };
-  if (wsPumps.has(msg.streamId)) return { ok: false, reason: 'duplicate stream id' };
-  const abort = new AbortController();
-  wsPumps.set(msg.streamId, abort);
-  const open =
-    path === MUX_EVENTS_PATH
-      ? (signal) => apiProxy.events.mux({ rpcId: randomUUID(), payload: {} }, signal)
-      : (signal) => apiProxy.events.host({ rpcId: randomUUID(), payload: {} }, signal);
-  (async () => {
-    try {
-      for await (const item of open(abort.signal)) {
-        sendWsFrame(msg.streamId, JSON.stringify(serverRequest(item)));
-      }
-    } catch (error) {
-      if (!abort.signal.aborted) {
-        sendWsFrame(msg.streamId, JSON.stringify(failureFrame(error)));
-      }
-    } finally {
-      wsPumps.delete(msg.streamId);
-    }
-  })();
-  return { ok: true };
 }
 
 function openGenericWs(msg, path) {
@@ -1295,18 +857,10 @@ function handleWsOpen(msg) {
   if (msg.streamId === undefined || typeof msg.path !== 'string') {
     return { ok: false, reason: 'bad stream shape' };
   }
-  if (msg.path === MUX_EVENTS_PATH || msg.path === HOST_EVENTS_PATH) {
-    return openEventsPump(msg, msg.path);
-  }
   return openGenericWs(msg, msg.path);
 }
 
 function handleWsClose(msg) {
-  const abort = wsPumps.get(msg.streamId);
-  if (abort !== undefined) {
-    abort.abort();
-    wsPumps.delete(msg.streamId);
-  }
   const session = wsSessions.get(msg.streamId);
   if (session !== undefined) {
     wsSessions.delete(msg.streamId);
@@ -1335,65 +889,138 @@ function handleWsSend(msg) {
 }
 
 // ---------------------------------------------------------------------------
+// native notification toggles. The Rust shell persists them to
+// notify-prefs.json beside the www dir and pushes live updates as
+// set-notify-prefs bridge frames; a fresh boot replays the file.
+// ---------------------------------------------------------------------------
+const NOTIFY_TYPES = { turn_end: true, turn_failure: true, approval: true, error: true, plugin: true };
+const NOTIFY_PREFS_PATH = () => join(dirname(WWW_DIR), 'notify-prefs.json');
+
+function normalizeNotifyPrefs(input) {
+  // Canonical shape: { enabled: boolean, <type>: boolean, ... } with a global
+  // master switch. Tolerates the legacy { enabled: { <type>: boolean } } file.
+  const out = { enabled: true };
+  for (const key of Object.keys(NOTIFY_TYPES)) out[key] = NOTIFY_TYPES[key];
+  if (input === null || typeof input !== 'object') return out;
+  const legacy = input.enabled !== null && typeof input.enabled === 'object' ? input.enabled : null;
+  if (typeof input.enabled === 'boolean') out.enabled = input.enabled;
+  for (const key of Object.keys(NOTIFY_TYPES)) {
+    const value = legacy !== null ? legacy[key] : input[key];
+    if (typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
+function loadNotifyPrefs() {
+  try {
+    return normalizeNotifyPrefs(JSON.parse(readFileSync(NOTIFY_PREFS_PATH(), 'utf8')));
+  } catch {
+    return normalizeNotifyPrefs(null);
+  }
+}
+
+let notifyPrefs = loadNotifyPrefs();
+
+// ---------------------------------------------------------------------------
 // native notifications (window-visible filtering happens on the Rust side)
 // ---------------------------------------------------------------------------
 function installNotificationPumps() {
-  const apiProxy = ctx.get('apiProxy');
-  if (apiProxy === undefined) return;
-  const abort = new AbortController();
-  const subagentSessions = new Set();
   const short = (id) => String(id).slice(0, 8);
-  const pump = async (stream, onFrame) => {
-    try {
-      for await (const item of stream({ rpcId: randomUUID(), payload: {} }, abort.signal)) {
-        onFrame(item.payload);
+  const disposers = [];
+
+  // Live per-session events from the durable log. The host emits each appended
+  // event with (session, event); the same channel drives the client transport.
+  // Turn tracking mirrors the reference desktop plugin: only user-initiated
+  // turns that actually complete (or fail) raise a notification, so agent
+  // follow-up turns and streaming noise stay quiet.
+  const openTurns = new Map();
+  const keyOf = (session) => {
+    const id = session?.id ?? session?.header?.id;
+    return id === undefined ? undefined : String(id);
+  };
+  const subagentOf = (session) => session?.header?.origin === 'subagent';
+
+  disposers.push(ctx.on('session/event', (session, event) => {
+    if (event === undefined) return;
+    const sid = keyOf(session);
+    switch (event.type) {
+      case 'approval/asked': {
+        if (!(notifyPrefs.enabled && notifyPrefs.approval)) break;
+        const toolName = event.data?.toolName;
+        frame({
+          type: 'notify',
+          title: '需要审批',
+          body: toolName ? `工具 ${toolName} 请求执行权限` : '有工具请求执行权限',
+          backgroundOnly: false,
+        });
+        break;
       }
-    } catch (error) {
-      if (!abort.signal.aborted) console.error('[host] notification stream ended:', error);
+      case 'turn/start': {
+        if (sid !== undefined) openTurns.set(sid, { turn: event.data?.turn, userInitiated: false });
+        break;
+      }
+      case 'user/message': {
+        const openTurn = sid === undefined ? undefined : openTurns.get(sid);
+        if (openTurn !== undefined && event.data?.source?.kind === 'user') openTurn.userInitiated = true;
+        break;
+      }
+      case 'turn/end': {
+        if (sid === undefined) break;
+        const openTurn = openTurns.get(sid);
+        openTurns.delete(sid);
+        if (openTurn === undefined || openTurn.turn !== event.data?.turn || !openTurn.userInitiated || subagentOf(session)) break;
+        const reason = event.data?.reason?.kind;
+        if (reason === 'completed' && notifyPrefs.enabled && notifyPrefs.turn_end) {
+          frame({ type: 'notify', title: '完成对话', body: `会话 ${short(sid)} 的回复已就绪`, backgroundOnly: false });
+        } else if ((reason === 'error' || reason === 'max-tokens') && notifyPrefs.enabled && notifyPrefs.turn_failure) {
+          frame({ type: 'notify', title: '会话失败', body: `会话 ${short(sid)} 回复出错，请查看对话确认`, backgroundOnly: false });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }, { global: true }));
+
+  // Forget half-open turn markers when a session goes away.
+  disposers.push(ctx.on('session/disposed', (session) => {
+    const sid = keyOf(session);
+    if (sid !== undefined) openTurns.delete(sid);
+  }, { global: true }));
+
+  // Transport-level session errors (the session controller re-emits agent
+  // errors with a stable message string).
+  disposers.push(ctx.on('api-session/error', (sessionId, message) => {
+    if (!(notifyPrefs.enabled && notifyPrefs.error)) return;
+    frame({
+      type: 'notify',
+      title: '会话错误',
+      body: String(message ?? '未知错误'),
+      backgroundOnly: false,
+    });
+  }, { global: true }));
+
+  // Dynamic Cordis plugin run requests need in-app approval.
+  disposers.push(ctx.on('cordis/request-run', (payload) => {
+    if (!(notifyPrefs.enabled && notifyPrefs.plugin)) return;
+    const name = payload?.name;
+    frame({
+      type: 'notify',
+      title: '插件等待批准',
+      body: name ? `插件 ${name} 请求运行，请在应用中批准或拒绝` : '动态 Cordis 插件请求运行，请在应用中批准或拒绝',
+      backgroundOnly: false,
+    });
+  }, { global: true }));
+
+  return () => {
+    for (const dispose of disposers) {
+      try {
+        dispose();
+      } catch {
+        /* ignore */
+      }
     }
   };
-  void pump(apiProxy.events.mux, (payload) => {
-    switch (payload.type) {
-      case 'approval/requested':
-        frame({ type: 'notify', title: '需要审批', body: `工具 ${payload.toolName} 请求执行权限`, backgroundOnly: false });
-        break;
-      case 'question/requested': {
-        const first = payload.questions?.[0];
-        if (first !== undefined) {
-          frame({ type: 'notify', title: '等待回答', body: first.question, backgroundOnly: false });
-        }
-        break;
-      }
-      case 'session/event':
-        if (payload.event?.type === 'turn/end' && !subagentSessions.has(payload.sessionId)) {
-          frame({ type: 'notify', title: '完成对话', body: `会话 ${short(payload.sessionId)} 的回复已就绪`, backgroundOnly: true });
-        }
-        break;
-      default:
-        break;
-    }
-  });
-  void pump(apiProxy.events.host, (payload) => {
-    switch (payload.type) {
-      case 'host/session-added':
-        if (payload.origin === 'subagent') subagentSessions.add(payload.sessionId);
-        break;
-      case 'host/session-removed':
-        subagentSessions.delete(payload.sessionId);
-        break;
-      case 'host/agent-error':
-        frame({ type: 'notify', title: '会话错误', body: payload.message, backgroundOnly: false });
-        break;
-      case 'host/remote-event':
-        if (payload.event === 'cordis/request-run') {
-          frame({ type: 'notify', title: '插件等待批准', body: '动态 Cordis 插件请求运行，请在应用中批准或拒绝', backgroundOnly: false });
-        }
-        break;
-      default:
-        break;
-    }
-  });
-  return () => abort.abort();
 }
 
 // ---------------------------------------------------------------------------
@@ -1403,15 +1030,8 @@ let ctx = null;
 let notificationDispose = null;
 let exiting = false;
 
-function handleMessage(line) {
-  if (line.trim() === '') return;
-  let msg;
-  try {
-    msg = JSON.parse(line);
-  } catch {
-    console.error(`[host] bad bridge frame: ${line.slice(0, 200)}`);
-    return;
-  }
+function handleMessage(msg) {
+  if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) return;
   switch (msg.type) {
     case 'ping':
       frame({ type: 'pong', id: msg.id });
@@ -1438,6 +1058,10 @@ function handleMessage(line) {
     case 'ws-close': {
       handleWsClose(msg);
       frame({ type: 'ws-close-result', id: msg.id, ok: true });
+      return;
+    }
+    case 'set-notify-prefs': {
+      notifyPrefs = normalizeNotifyPrefs(msg.prefs);
       return;
     }
     default:
@@ -1488,14 +1112,48 @@ async function main() {
   // A force-killed shell surfaces as EOF (`end`/`close`), which shuts the
   // host down exactly like the previous readline loop did.
   let pending = null;
-  let received = Buffer.alloc(0);
+  // Buffered stdin bytes as a chunk list: bodies can reach the 128 MB limit,
+  // so repeatedly concatenating the whole remainder per chunk would be O(n²).
+  // We only spell bytes out of the front exactly once per message.
+  let chunks = [];
+  let chunkLen = 0;
+  function append(data) {
+    chunks.push(data);
+    chunkLen += data.byteLength;
+  }
+  function take(n) {
+    if (chunkLen < n) return null;
+    const out = Buffer.allocUnsafe(n);
+    let filled = 0;
+    while (filled < n) {
+      const c = chunks[0];
+      const takeNow = Math.min(c.byteLength, n - filled);
+      c.copy(out, filled, 0, takeNow);
+      filled += takeNow;
+      if (takeNow === c.byteLength) chunks.shift();
+      else chunks[0] = c.subarray(takeNow);
+    }
+    chunkLen -= n;
+    return out;
+  }
+  function takeLine() {
+    let offset = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const idx = chunks[i].indexOf(0x0a);
+      if (idx !== -1) {
+        const line = take(offset + idx).toString('utf8');
+        take(1); // consume the newline
+        return line;
+      }
+      offset += chunks[i].byteLength;
+    }
+    return null;
+  }
   function pump() {
     for (;;) {
       if (pending === null) {
-        const nl = received.indexOf(0x0a);
-        if (nl === -1) break;
-        const line = received.subarray(0, nl).toString('utf8');
-        received = received.subarray(nl + 1);
+        const line = takeLine();
+        if (line === null) break;
         if (line.trim() === '') continue;
         let msg;
         try {
@@ -1512,11 +1170,10 @@ async function main() {
         }
       } else {
         const need = pending.msg.bodyLen - pending.filled;
-        if (received.length === 0) break;
-        const take = Math.min(need, received.length);
-        received.copy(pending.body, pending.filled, 0, take);
-        received = received.subarray(take);
-        pending.filled += take;
+        const piece = take(need);
+        if (piece === null) break;
+        piece.copy(pending.body, pending.filled);
+        pending.filled += piece.byteLength;
         if (pending.filled === pending.msg.bodyLen) {
           const { msg, body } = pending;
           pending = null;
@@ -1528,7 +1185,7 @@ async function main() {
     }
   }
   process.stdin.on('data', (chunk) => {
-    received = received.length === 0 ? chunk : Buffer.concat([received, chunk]);
+    append(chunk);
     pump();
   });
   process.stdin.on('close', () => void shutdown('bridge stdin closed'));

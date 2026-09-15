@@ -26,7 +26,7 @@ else
 fi
 
 PRODUCT_NAME="DSH Desktop"
-VERSION="${VERSION:-0.6.8}"
+VERSION="${VERSION:-0.7.4}"
 IDENTIFIER="com.deepseek.harness.desktop"
 BUNDLE_ROOT="src-tauri/target/release/bundle/macos"
 APP_DIR="${BUNDLE_ROOT}/${PRODUCT_NAME}.app"
@@ -55,7 +55,7 @@ chmod +x "${CONTENTS}/MacOS/dsh-desktop"
 # Shell + icon + the portless Node host resources. The sidecar resolver checks
 # Resources/host first in release builds, so the .app is self-contained for the
 # host layer (the Node runtime and @deepseek-ai/dsh come from the user env).
-cp host/sidecar.mjs host/ipc-web-server.mjs host/ws-ipc.mjs host/desktop-pnpm.mjs "${CONTENTS}/Resources/host/"
+cp host/sidecar.mjs host/ipc-web-server.mjs host/ws-ipc.mjs host/desktop-pnpm.mjs host/desktop-about-template.mjs "${CONTENTS}/Resources/host/"
 cp src-tauri/icons/icon.icns "${CONTENTS}/Resources/icon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

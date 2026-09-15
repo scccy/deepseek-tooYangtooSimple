@@ -2,6 +2,7 @@ use base64::Engine;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -145,7 +146,7 @@ fn pump_fetch_channel(
             _ => continue,
         };
         let ok = channel.send(frame);
-        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+        if crate::envs::trace_bridge() {
             eprintln!("[dsh-bridge] pump channel send -> {ok:?}");
         }
         if ok.is_err() {
@@ -197,7 +198,7 @@ pub async fn bridge_ws_open(
         .ok_or_else(|| "host did not answer ws-open".to_string())?;
     match event {
         BridgeEvent::WsResult { ok, reason, .. } => {
-            if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+            if crate::envs::trace_bridge() {
                 eprintln!("[dsh-bridge] ws-open command resolved {ok} {reason}");
             }
             if ok {
@@ -226,12 +227,10 @@ pub async fn bridge_ws_close(
         .clone()
         .request_async(json!({ "type": "ws-close", "streamId": stream_id }))
         .await?;
-    if let Some(BridgeEvent::WsCloseResult { ok, .. }) =
+    if let Some(BridgeEvent::WsCloseResult { ok: true, .. }) =
         Bridge::recv_event_timeout(&receiver, Duration::from_secs(10))
     {
-        if ok {
-            return Ok(());
-        }
+        return Ok(());
     }
     Ok(())
 }
@@ -505,4 +504,77 @@ pub fn shell_diagnostics(app: AppHandle) -> Result<String, String> {
         "log_tail": log_tail,
     })
     .to_string())
+}
+
+// ---------------------------------------------------------------------------
+// native notification toggles
+// ---------------------------------------------------------------------------
+const NOTIFY_PREFS_FILENAME: &str = "notify-prefs.json";
+const NOTIFY_KEYS: [&str; 5] = ["turn_end", "turn_failure", "approval", "error", "plugin"];
+
+fn notify_prefs_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(NOTIFY_PREFS_FILENAME))
+}
+
+/// Merge user settings over the all-on default, keeping only the known keys
+/// and booleans, so a stale or malformed file never breaks the settings panel.
+/// Canonical shape: `{ enabled: bool, <type>: bool, ... }` (a global master
+/// switch plus per-type toggles); the legacy `{ enabled: {<type>: bool} }`
+/// layout is still accepted.
+fn normalize_notify_prefs(input: Option<&Value>) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("enabled".to_string(), json!(true));
+    for key in NOTIFY_KEYS {
+        out.insert(key.to_string(), json!(true));
+    }
+    if let Some(Value::Object(obj)) = input {
+        if let Some(Value::Bool(global)) = obj.get("enabled") {
+            out.insert("enabled".to_string(), json!(global));
+        }
+        let legacy = match obj.get("enabled") {
+            Some(Value::Object(m)) => Some(m),
+            _ => None,
+        };
+        for key in NOTIFY_KEYS {
+            let value = legacy
+                .and_then(|m| m.get(key))
+                .or_else(|| obj.get(key));
+            if let Some(Value::Bool(v)) = value {
+                out.insert(key.to_string(), json!(v));
+            }
+        }
+    }
+    Value::Object(out)
+}
+
+/// Read the persisted notification toggles for the settings panel.
+#[tauri::command]
+pub fn shell_get_notify_prefs(app: AppHandle) -> Result<String, String> {
+    let path = notify_prefs_path(&app).ok_or_else(|| "app data dir unavailable".to_string())?;
+    let value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok());
+    Ok(normalize_notify_prefs(value.as_ref()).to_string())
+}
+
+/// Persist the notification toggles and push them to the sidecar's notify
+/// pump so the change applies without a host restart.
+#[tauri::command]
+pub fn shell_set_notify_prefs(app: AppHandle, prefs: String) -> Result<(), String> {
+    let parsed: Value =
+        serde_json::from_str(&prefs).map_err(|e| format!("invalid notify prefs: {e}"))?;
+    let normalized = normalize_notify_prefs(Some(&parsed));
+    let path = notify_prefs_path(&app).ok_or_else(|| "app data dir unavailable".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, normalized.to_string()).map_err(|e| e.to_string())?;
+    let state = app.state::<crate::AppState>();
+    state
+        .bridge
+        .send_direct(json!({ "type": "set-notify-prefs", "prefs": normalized }));
+    Ok(())
 }

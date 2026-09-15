@@ -57,7 +57,10 @@
 - 每次启动自动对比本地与 npm 仓库的 dsh 版本，有新版本时弹出系统通知
 - 菜单栏托盘：关闭按钮隐藏窗口，会话继续运行；托盘单击恢复，菜单可退出
 - 单实例：再次启动聚焦既有窗口（macOS 额外支持 Dock `Reopen`）
-- OS 系统通知：需要审批 / 等待回答 / 完成对话 / 会话错误 / 插件批准（后台时）
+- OS 系统通知：需要审批 / 完成对话 / 会话错误 / 插件批准（后台时）。通知由
+  sidecar 订阅宿主事件流驱动（`session/event` 的 `approval/asked`、`turn/end`，
+  `api-session/error`，`cordis/request-run`），不再依赖旧版 dsh 的 `apiProxy.events`
+  端点；"等待回答"因当前 dsh 无对应宿主事件暂不覆盖
 - sidecar 进程组管理：退出时 SIGTERM → SIGKILL 回收 agent 子进程
   （Windows 用 `taskkill /T /F`）
 

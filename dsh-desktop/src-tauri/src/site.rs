@@ -176,16 +176,7 @@ fn safe_path(path: &str, root: &Path) -> Option<PathBuf> {
     }
 }
 
-pub fn serve_static(uri_path: &str) -> Response<Vec<u8>> {
-    let Some(bridge) = GLOBAL_BRIDGE.get().cloned() else {
-        return text_response(StatusCode::SERVICE_UNAVAILABLE, "bridge unavailable\n");
-    };
-    let Some(www) = bridge.www_dir() else {
-        return text_response(StatusCode::SERVICE_UNAVAILABLE, "host has not booted yet\n");
-    };
-    let Some(path) = safe_path(uri_path, &www) else {
-        return text_response(StatusCode::FORBIDDEN, "forbidden\n");
-    };
+fn serve_static(path: &Path) -> Response<Vec<u8>> {
     if path.is_dir() {
         let index = path.join("index.html");
         if let Some(data) = read_static_cached(&index) {
@@ -224,7 +215,7 @@ fn text_response(status: StatusCode, body: &str) -> Response<Vec<u8>> {
 pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let uri = request.uri().clone();
     let path = uri.path().to_owned();
-    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+    if crate::envs::trace_bridge() {
         eprintln!(
             "[dsh-site] {} {}",
             request.method().as_str(),
@@ -256,7 +247,7 @@ pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     if let Some(www) = bridge_handle.www_dir() {
         if let Some(target) = safe_path(&path, &www) {
             if target.is_file() {
-                let response = serve_static(&path);
+                let response = serve_static(&target);
                 if response.status() == StatusCode::OK {
                     return response;
                 }
@@ -273,7 +264,7 @@ pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     }
     let query = uri.query().map(|q| format!("?{q}")).unwrap_or_default();
     let url = format!("{path}{query}");
-    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+    if crate::envs::trace_bridge() {
         eprintln!("[dsh-site] route dispatch: {url}");
     }
     // The rust->node bridge sets Host: 127.0.0.1; strip browser markers as

@@ -12,6 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
+// macOS delivers through the native UNUserNotificationCenter path (notify.rs);
+// the Tauri plugin presenter is only used on other platforms.
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::host;
@@ -169,16 +172,22 @@ impl Bridge {
             host::terminate_child(child);
         }
 
+        self.fail_pending("host sidecar restarted");
+        *self.ready.write().unwrap() = None;
+        *self.status.write().unwrap() = None;
+        self.exited.store(false, Ordering::SeqCst);
+    }
+
+    /// Clear every in-flight request waiter with an error, so no command hangs
+    /// on a dead or replaced sidecar.
+    pub fn fail_pending(&self, message: &str) {
         let pending = std::mem::take(&mut *self.pending.lock().unwrap());
         for (_, tx) in pending {
             let _ = tx.send(BridgeEvent::Error {
                 id: 0,
-                message: "host sidecar restarted".to_string(),
+                message: message.to_string(),
             });
         }
-        *self.ready.write().unwrap() = None;
-        *self.status.write().unwrap() = None;
-        self.exited.store(false, Ordering::SeqCst);
     }
 
     pub fn ready(&self) -> Option<ReadyInfo> {
@@ -201,12 +210,12 @@ impl Bridge {
         self.status.read().unwrap().clone()
     }
 
-    fn set_ready(&self, _ok: bool, www: Option<PathBuf>, error: Option<String>) {
+    fn set_ready(&self, www: Option<PathBuf>, error: Option<String>) {
         *self.ready.write().unwrap() = Some(ReadyInfo { www, error });
     }
 
-    pub fn set_ready_pedantic(&self, ok: bool, error: Option<String>) {
-        self.set_ready(ok, None, error);
+    pub fn set_ready_failed(&self, error: String) {
+        self.set_ready(None, Some(error));
     }
 
     fn next_id(&self) -> u64 {
@@ -220,7 +229,7 @@ impl Bridge {
     /// Send an NDJSON request and register the pending receiver atomically.
     pub fn request(&self, msg: Value) -> Result<(u64, Receiver<BridgeEvent>), String> {
         let id = self.next_id();
-        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+        if crate::envs::trace_bridge() {
             let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
             eprintln!("[dsh-bridge] send {kind} as {id}");
         }
@@ -255,7 +264,7 @@ impl Bridge {
         body: Vec<u8>,
     ) -> Result<(u64, Receiver<BridgeEvent>), String> {
         let id = self.next_id();
-        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+        if crate::envs::trace_bridge() {
             let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
             eprintln!("[dsh-bridge] send {kind} as {id} (+{} bytes)", body.len());
         }
@@ -297,6 +306,17 @@ impl Bridge {
             .map_err(|e| format!("bridge task failed: {e}"))?
     }
 
+    /// One-way NDJSON frame to the sidecar (fire-and-forget: no pending slot,
+    /// no response expected). Used for control messages like `set-notify-prefs`.
+    pub fn send_direct(&self, msg: Value) {
+        let mut guard = self.stdin.lock().unwrap();
+        let Some(stdin) = guard.as_mut() else {
+            return;
+        };
+        let _ = stdin.write_all(format!("{}\n", msg).as_bytes());
+        let _ = stdin.flush();
+    }
+
     /// Wait for a single event matching expectations; returns timeout.
     pub fn recv_event_timeout(
         rx: &Receiver<BridgeEvent>,
@@ -336,7 +356,7 @@ impl Bridge {
             Some(bytes) if !bytes.is_empty() => self.request_with_body(request_msg, bytes)?,
             _ => self.request(request_msg)?,
         };
-        if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+        if crate::envs::trace_bridge() {
             eprintln!("[dsh-bridge] fetch_full: {url}");
         }
         let deadline = Instant::now() + timeout;
@@ -352,7 +372,7 @@ impl Bridge {
                 Some(BridgeEvent::Headers {
                     status: s, headers, ..
                 }) => {
-                    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+                    if crate::envs::trace_bridge() {
                         eprintln!("[dsh-bridge] fetch_full headers {s}");
                     }
                     status = s;
@@ -362,7 +382,7 @@ impl Bridge {
                     chunks.push(data);
                 }
                 Some(BridgeEvent::End { .. }) => {
-                    if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+                    if crate::envs::trace_bridge() {
                         eprintln!("[dsh-bridge] fetch_full end");
                     }
                     break;
@@ -522,7 +542,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
     }
 
     let Some(stdout) = io.stdout else {
-        bridge.set_ready(false, None, Some("no host stdout".to_string()));
+        bridge.set_ready(None, Some("no host stdout".to_string()));
         return;
     };
 
@@ -555,7 +575,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                 continue;
             };
             let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
-            if crate::envs::is_1("DSH_DESKTOP_TRACE_BRIDGE", "DSH_MAC_TRACE_BRIDGE") {
+            if crate::envs::trace_bridge() {
                 eprintln!("[dsh-bridge] recv {kind} {:?}", msg.get("id"));
             }
             // Binary bulk path: header line followed by `len` raw bytes.
@@ -588,7 +608,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                         .map(PathBuf::from);
                     let error_text = msg.get("error").and_then(Value::as_str).map(str::to_owned);
                     let error_for_set = error_text.clone();
-                    bridge.set_ready(ok, if ok { www } else { None }, error_for_set);
+                    bridge.set_ready(if ok { www } else { None }, error_for_set);
                     if ok {
                         eprintln!("[dsh-host] ready");
                     } else {
@@ -715,13 +735,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                         }),
                     );
                     // Wake every waiter so no command hangs on a dead host.
-                    let pending = std::mem::take(&mut *bridge.pending.lock().unwrap());
-                    for (_, tx) in pending {
-                        let _ = tx.send(BridgeEvent::Error {
-                            id: 0,
-                            message: "host sidecar exited".to_string(),
-                        });
-                    }
+                    bridge.fail_pending("host sidecar exited");
                     break;
                 }
                 _ => {
@@ -735,13 +749,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
         if !bridge.finish_reader_generation(generation) {
             return;
         }
-        let pending = std::mem::take(&mut *bridge.pending.lock().unwrap());
-        for (_, tx) in pending {
-            let _ = tx.send(BridgeEvent::Error {
-                id: 0,
-                message: "host sidecar exited".to_string(),
-            });
-        }
+        bridge.fail_pending("host sidecar exited");
     });
 }
 
@@ -753,14 +761,21 @@ pub(crate) fn show_notification(app: &AppHandle, title: String, body: String, ba
             }
         }
     }
-    let result = app
-        .notification()
-        .builder()
-        .title(&title)
-        .body(&body)
-        .show();
-    if let Err(error) = result {
-        eprintln!("[dsh-desktop] notification failed: {error}");
+    #[cfg(target_os = "macos")]
+    {
+        crate::notify::send(&title, &body);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let result = app
+            .notification()
+            .builder()
+            .title(&title)
+            .body(&body)
+            .show();
+        if let Err(error) = result {
+            eprintln!("[dsh-desktop] notification failed: {error}");
+        }
     }
 }
 

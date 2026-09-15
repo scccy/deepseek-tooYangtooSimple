@@ -17,7 +17,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/host"
 
 cp src-tauri/target/debug/dsh-desktop "${CONTENTS}/MacOS/dsh-desktop"
 chmod +x "${CONTENTS}/MacOS/dsh-desktop"
-cp host/sidecar.mjs host/ipc-web-server.mjs host/ws-ipc.mjs host/desktop-pnpm.mjs "${CONTENTS}/Resources/host/"
+cp host/sidecar.mjs host/ipc-web-server.mjs host/ws-ipc.mjs host/desktop-pnpm.mjs host/desktop-about-template.mjs "${CONTENTS}/Resources/host/"
 cp src-tauri/icons/icon.icns "${CONTENTS}/Resources/icon.icns"
 
 # Reuse a Tauri-generated plist when available; otherwise synthesize it below.
@@ -35,8 +35,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>${PRODUCT_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.6.7</string>
-  <key>CFBundleVersion</key><string>0.6.7</string>
+  <key>CFBundleShortVersionString</key><string>0.7.4</string>
+  <key>CFBundleVersion</key><string>0.7.4</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>

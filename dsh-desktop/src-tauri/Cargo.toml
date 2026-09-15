@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "0.6.8"
+version = "0.7.4"
 description = "DeepSeek Harness desktop shell (Tauri) — Rust shell + WKWebView, DSH (Node) runs as a sidecar"
 authors = ["DSH Desktop"]
 edition = "2021"
@@ -23,6 +23,7 @@ libc = "0.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [profile.release]
 strip = true
