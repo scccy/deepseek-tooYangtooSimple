@@ -303,7 +303,10 @@ async function bootHost() {
     hostCtx.provide('profileContext', {
       name: NAME,
       dir: profile.dir,
-      patchPath: HOME_PATCH_PATH(),
+      // 官方 profile-boot 用的是 profile 自己的 patch（<profile>/cordis.patch.yml）；
+      // $DSH_HOME/cordis.patch.yml 是 home 级层，优先级更高，不能当作可写目标，
+      // 否则 settings 的写入（如欢迎弹窗确认版本）会被 home 层的旧值盖掉。
+      patchPath: join(profile.dir, PROFILE_PATCH_FILENAME),
       installAnchor: INSTALL_ANCHOR,
       startedBundles: profile.layers.map((layer) => layer.packageName),
       cwd: process.cwd(),
