@@ -55,7 +55,7 @@ const resolvePackage = (id) => pkgRequire.resolve(id);
 const importPackage = async (id) => import(pathToFileURL(resolvePackage(id)).href);
 const INSTALL_ANCHOR = resolvePackage('@deepseek-ai/dsh/package.json');
 
-const [{ boot, composeEntries, healProfilesModuleFallback, loadLayeredEnv, loadOptionalPatches, loadProfile, PROFILE_PATCH_FILENAME }, { resolveDshHome }, { DSH_LAUNCH_ENVIRONMENT_KEY }, { provideCmdline }] = await Promise.all([
+const [{ boot, composeEntries, createRuntimeResolution, healProfilesModuleFallback, loadLayeredEnv, loadOptionalPatches, loadProfile, PluginPackages, PROFILE_PATCH_FILENAME }, { resolveDshHome }, { DSH_LAUNCH_ENVIRONMENT_KEY }, { provideCmdline }] = await Promise.all([
   importPackage('@deepseek-ai/dsh-app-boot'),
   importPackage('@deepseek-ai/dsh-home-paths'),
   importPackage('@deepseek-ai/dsh-launch-environment'),
@@ -240,10 +240,16 @@ async function bootHost() {
   process.chdir(cwd);
 
   const profile = loadProfile(NAME, 'web', INSTALL_ANCHOR, undefined, { userLayer: true });
-  // dsh >= 0.1.2-rc.1: healProfilesModuleFallback 改为 async 对象参数
-  // { installAnchor, profile?, home? }，见官方 profile-boot 用法。
-  await healProfilesModuleFallback({ installAnchor: INSTALL_ANCHOR, profile });
-  console.error('[host] boot: profile loaded, module fallback healed');
+  // dsh 0.1.2-rc.1 ~ 0.1.5：healProfilesModuleFallback({ installAnchor, profile?, home? })
+  // 把安装依赖闭包镜像到 $DSH_HOME/profiles/node_modules。dsh >= 0.1.6 移除了该导出：
+  // 模块解析改为进程内 createRuntimeResolution 完成，旧 link 投影由
+  // removeLinkProjections 清理，launch 侧无需再做 heal —— 按版本探测跳过。
+  if (typeof healProfilesModuleFallback === 'function') {
+    await healProfilesModuleFallback({ installAnchor: INSTALL_ANCHOR, profile });
+    console.error('[host] boot: profile loaded, module fallback healed');
+  } else {
+    console.error('[host] boot: profile loaded (healProfilesModuleFallback absent on this dsh, skipped)');
+  }
   writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG);
   ensureDesktopAboutBundle(profile.dir);
   // DSH Desktop 2.x public Host services. Their presence is how cross-
@@ -283,8 +289,16 @@ async function bootHost() {
   const patches = [...bundlePatches, ...profile.patches, ...homePatches, ...overlays];
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME);
 
-  const ctx = await boot(NAME, rootConfig, patches, (hostCtx) => {
+  const ctx = await boot(NAME, rootConfig, patches, async (hostCtx) => {
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, loadLayeredEnv(NAME));
+    // dsh >= 0.1.6：bare 包解析不再依赖磁盘 link 投影，而是由 PluginPackages
+    // 服务的进程内运行时拦截完成（官方 profile-boot 同款用法）。0.1.2~0.1.5
+    // 没有这两个导出，靠 healProfilesModuleFallback 写盘，跳过即可。
+    if (typeof PluginPackages === 'function' && typeof createRuntimeResolution === 'function') {
+      await hostCtx.plugin(PluginPackages, {
+        resolution: await createRuntimeResolution({ installAnchor: INSTALL_ANCHOR, profile }),
+      });
+    }
     // The desktop shell IS the Web UI: never hand off to the system default
     // browser. Without --no-open, dsh-web-app boots with openBrowser=true and
     // opens the portless mock origin (http://127.0.0.1:0/) in the browser on
