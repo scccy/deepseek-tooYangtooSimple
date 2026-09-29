@@ -147,6 +147,10 @@ const DESKTOP_PATCHES = [
     config: { printUrl: false, surfaceContext: false, trustedHosts: [], openBrowser: false },
   },
   { id: 'client-hmr', disabled: true },
+  // dsh >= 0.1.6：base 里 hmr 行改成 `disabled: !profileContext`。桌面端必须
+  // 提供 profileContext（settings / config-editor 两行同样靠它开启，否则前端报
+  // "settings service is absent"），但打包应用不需要宿主 HMR，这里显式关回去。
+  { id: 'hmr', disabled: true },
   { insert: [{ id: 'desktop-version', name: ABOUT_PACKAGE }] },
 ];
 
@@ -291,6 +295,22 @@ async function bootHost() {
 
   const ctx = await boot(NAME, rootConfig, patches, async (hostCtx) => {
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, loadLayeredEnv(NAME));
+    // dsh >= 0.1.6：settings / config-editor / plugin-manager 等行在 base patch 里
+    // 被写成 `disabled: !ctx.get('profileContext')`，且 settings、config-editor
+    // 运行时还要 inject 它（读 patchPath / dir / installAnchor）。桌面端此前从未
+    // 提供该服务，前端因此报 "settings service is absent"。按官方 profile-boot
+    // 的字段形状补齐即可。
+    hostCtx.provide('profileContext', {
+      name: NAME,
+      dir: profile.dir,
+      patchPath: HOME_PATCH_PATH(),
+      installAnchor: INSTALL_ANCHOR,
+      startedBundles: profile.layers.map((layer) => layer.packageName),
+      cwd: process.cwd(),
+      home: resolveDshHome(),
+      overlays,
+      telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
+    });
     // dsh >= 0.1.6：bare 包解析不再依赖磁盘 link 投影，而是由 PluginPackages
     // 服务的进程内运行时拦截完成（官方 profile-boot 同款用法）。0.1.2~0.1.5
     // 没有这两个导出，靠 healProfilesModuleFallback 写盘，跳过即可。
