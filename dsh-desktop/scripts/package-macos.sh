@@ -55,7 +55,7 @@ chmod +x "${CONTENTS}/MacOS/dsh-desktop"
 # Shell + icon + the portless Node host resources. The sidecar resolver checks
 # Resources/host first in release builds, so the .app is self-contained for the
 # host layer (the Node runtime and @deepseek-ai/dsh come from the user env).
-cp host/sidecar.mjs host/ipc-web-server.mjs host/ws-ipc.mjs host/desktop-pnpm.mjs host/desktop-about-template.mjs "${CONTENTS}/Resources/host/"
+cp host/host.mjs host/desktop-pnpm.mjs host/desktop-about-template.mjs "${CONTENTS}/Resources/host/"
 cp src-tauri/icons/icon.icns "${CONTENTS}/Resources/icon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

@@ -17,7 +17,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/host"
 
 cp src-tauri/target/debug/dsh-desktop "${CONTENTS}/MacOS/dsh-desktop"
 chmod +x "${CONTENTS}/MacOS/dsh-desktop"
-cp host/sidecar.mjs host/ipc-web-server.mjs host/ws-ipc.mjs host/desktop-pnpm.mjs host/desktop-about-template.mjs "${CONTENTS}/Resources/host/"
+cp host/host.mjs host/desktop-pnpm.mjs host/desktop-about-template.mjs "${CONTENTS}/Resources/host/"
 cp src-tauri/icons/icon.icns "${CONTENTS}/Resources/icon.icns"
 
 # Reuse a Tauri-generated plist when available; otherwise synthesize it below.
