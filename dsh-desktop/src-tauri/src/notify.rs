@@ -31,5 +31,9 @@ pub fn send(title: &str, body: &str) {
 #[cfg(not(target_os = "macos"))]
 pub fn setup() {}
 
+// API symmetry only: non-macOS notifications route through
+// tauri-plugin-notification in bridge::show_notification, so this stub is
+// never called on those targets (hence the dead-code allowance).
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 pub fn send(_title: &str, _body: &str) {}

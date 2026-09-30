@@ -242,10 +242,6 @@ mod tests {
     }
 }
 
-pub fn credential_expired_title() -> &'static str {
-    pick("凭据已过期", "Credential expired")
-}
-
 pub fn credential_expired_body() -> String {
     pick(
         "检测到 API 凭据失效，请在设置的模型页更新凭据。",
