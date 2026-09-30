@@ -37,10 +37,91 @@ pub fn focus_main_window(app: &AppHandle) {
     }
 }
 
-pub fn request_quit(app: &AppHandle) {
+pub fn finish_quit(app: &AppHandle) {
     let state = app.state::<crate::AppState>();
     state.quitting.store(true, Ordering::SeqCst);
     app.exit(0);
+}
+
+/// Merge repeated quit requests while an inspection/dialog is in flight, so
+/// Cmd+Q + tray-quit never stack a second dialog (official quit-confirmation
+/// semantics).
+static QUIT_INFLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn request_quit(app: &AppHandle) {
+    if QUIT_INFLIGHT.compare_exchange(
+        false,
+        true,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    )
+    .is_err()
+    {
+        return; // a quit decision is already in progress; join it by doing nothing
+    }
+    // The inspection wait (2s deadline) and the dialog both block; keep them
+    // off the menu/tray event thread.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        quit_with_inspection(handle);
+        QUIT_INFLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+/// Inspect what quitting would interrupt and, when something is running,
+/// ask before exiting. Anything that makes the inspection unavailable
+/// (host not ready, restart in flight, timeout) exits directly — a quit
+/// request must never wedge the app.
+fn quit_with_inspection(app: AppHandle) {
+    let state = app.state::<crate::AppState>();
+    if state.quitting.load(Ordering::SeqCst) {
+        finish_quit(&app);
+        return;
+    }
+    let mut pending: Option<(bool, bool, u64, u64)> = None;
+    if !state.restarting.load(Ordering::SeqCst) {
+        let bridge = state.bridge.clone();
+        if let Ok((_id, rx)) = bridge.request(json!({ "type": "quit-inspection" })) {
+            if let Some(BridgeEvent::QuitResult {
+                ready,
+                running_tasks,
+                scheduled_reminders,
+                details,
+                ..
+            }) = Bridge::recv_event_timeout(&rx, Duration::from_secs(2))
+            {
+                if ready && (running_tasks || scheduled_reminders) {
+                    let agents = details
+                        .get("agents")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let jobs = details.get("jobs").and_then(Value::as_u64).unwrap_or(0);
+                    pending = Some((running_tasks, scheduled_reminders, agents, jobs));
+                }
+            }
+        }
+    }
+    let Some((running, scheduled, agents, jobs)) = pending else {
+        finish_quit(&app);
+        return;
+    };
+
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    let body = crate::i18n::quit_dialog_body(running, scheduled, agents, jobs);
+    let confirmed = MessageDialog::new()
+        .set_title(crate::i18n::text(crate::i18n::Text::QuitDialogTitle))
+        .set_description(&body)
+        .set_level(MessageLevel::Warning)
+        .set_buttons(MessageButtons::OkCancelCustom(
+            crate::i18n::text(crate::i18n::Text::QuitConfirm).to_string(),
+            crate::i18n::text(crate::i18n::Text::QuitCancel).to_string(),
+        ))
+        .show();
+    if matches!(confirmed, MessageDialogResult::Yes | MessageDialogResult::Ok) {
+        finish_quit(&app);
+    }
+    // Cancel / dismiss: leave everything running; the next quit request
+    // re-inspects.
 }
 
 // ---------------------------------------------------------------------------

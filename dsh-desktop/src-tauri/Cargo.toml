@@ -17,6 +17,11 @@ percent-encoding = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2"
+# Native message dialogs (NSAlert / task dialog) for quit confirmation and
+# the startup-failure recovery dialog. rfd is a plain native wrapper with no
+# plugin/capability wiring; tauri-plugin-dialog is the fallback if this ever
+# conflicts with wry/tauri versions.
+rfd = "0.15"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

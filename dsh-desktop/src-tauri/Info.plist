@@ -14,5 +14,9 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <!-- Voice input inside session webviews requires an explicit usage
+       description; without it WKWebView mic capture is silently denied. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>DSH Desktop 需要麦克风权限以支持会话中的语音输入</string>
 </dict>
 </plist>

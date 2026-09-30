@@ -15,7 +15,9 @@
 mod bridge;
 mod commands;
 mod host;
+mod i18n;
 mod notify;
+mod recovery;
 mod site;
 mod envs;
 mod updater;
@@ -64,9 +66,11 @@ static POPUP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Full-viewport shutter injected into the live page when a hot restart is
 /// requested. Kept as a same-page overlay — the WebView never navigates away
-/// from the desktop app's own `dsh://` page.
-const RESTART_OVERLAY_JS: &str = r##"
-(() => {
+/// from the desktop app's own `dsh://` page. Text is localized at call time.
+fn restart_overlay_js() -> String {
+    format!(
+        r##"
+(() => {{
   if (document.getElementById("__dsh_restart_shim__")) return;
   var box = document.createElement("div");
   box.id = "__dsh_restart_shim__";
@@ -80,10 +84,13 @@ const RESTART_OVERLAY_JS: &str = r##"
   s.justifyContent = "center";
   s.font = "13px -apple-system, BlinkMacSystemFont, \"SF Pro Text\", sans-serif";
   s.color = "#c8c8d2";
-  box.textContent = "正在热重启 …";
+  box.textContent = "{}";
   (document.body || document.documentElement).appendChild(box);
-})();
-"##;
+}})();
+"##,
+        i18n::restarting_overlay_text()
+    )
+}
 
 /// Synthetic pointer-event selftest (DSH_DESKTOP_SELFTEST=1): drags the titlebar
 /// twice and resizes the west edge once, then reports window geometry deltas
@@ -197,12 +204,12 @@ fn open_popup_window(
 
 fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
     // ------------------------- application menu -------------------------
-    let about = PredefinedMenuItem::about(app, Some("关于 DSH Desktop"), None)?;
+    let about = PredefinedMenuItem::about(app, Some(i18n::text(i18n::Text::MenuAbout)), None)?;
     let services = PredefinedMenuItem::services(app, None)?;
     let hide = PredefinedMenuItem::hide(app, None)?;
     let hide_others = PredefinedMenuItem::hide_others(app, None)?;
     let show_all = PredefinedMenuItem::show_all(app, None)?;
-    let quit = MenuItemBuilder::with_id("menu-quit", "退出 DSH Desktop")
+    let quit = MenuItemBuilder::with_id("menu-quit", i18n::text(i18n::Text::MenuQuit))
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
     let app_menu = SubmenuBuilder::new(app, "DSH Desktop")
@@ -233,7 +240,7 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
         .item(&select_all)
         .build()?;
 
-    let reload = MenuItemBuilder::with_id("menu-reload", "Reload")
+    let reload = MenuItemBuilder::with_id("menu-reload", i18n::text(i18n::Text::MenuReload))
         .accelerator("CmdOrCtrl+R")
         .build(app)?;
     let fullscreen = PredefinedMenuItem::fullscreen(app, None)?;
@@ -256,8 +263,8 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
     app.set_menu(menu)?;
 
     // ------------------------- menu-bar tray -------------------------
-    let tray_show = MenuItemBuilder::with_id("tray-show", "显示 DSH Desktop").build(app)?;
-    let tray_quit = MenuItemBuilder::with_id("tray-quit", "退出 DSH Desktop").build(app)?;
+    let tray_show = MenuItemBuilder::with_id("tray-show", i18n::text(i18n::Text::TrayShow)).build(app)?;
+    let tray_quit = MenuItemBuilder::with_id("tray-quit", i18n::text(i18n::Text::MenuQuit)).build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .item(&tray_show)
         .separator()
@@ -392,6 +399,11 @@ fn navigate_to_result(
     } else {
         let message = error.unwrap_or_else(|| "unknown startup failure".to_string());
         eprintln!("dsh-desktop: {phase}: host failed: {message}");
+        // Native crash report + one-time recovery dialog: only for the first
+        // boot — hot restart / retry / reset keep their in-page recovery UX.
+        if phase == "startup" {
+            recovery::on_startup_failure(app, "host", &message);
+        }
         let encoded =
             percent_encoding::utf8_percent_encode(&message, percent_encoding::NON_ALPHANUMERIC)
                 .to_string();
@@ -423,7 +435,7 @@ fn startup_update_check(app: tauri::AppHandle) {
             bridge::show_notification(
                 &app,
                 "DSH Desktop".to_string(),
-                format!("dsh 有新版本 v{latest} 可用（当前 v{local}），可在设置中一键更新"),
+                i18n::update_available_body(&latest, &local),
                 false,
             );
         } else if let Some(error) = info.error.clone() {
@@ -459,8 +471,7 @@ fn startup_stale_server_check(app: tauri::AppHandle) {
             bridge::show_notification(
                 &app,
                 "DSH Desktop".to_string(),
-                "检测到旧版 dsh web 仍在 127.0.0.1:3080 监听：桌面版为无端口形态，请用 pkill -f \"dsh --profile web\" 结束旧进程，避免浏览器打开到旧页面"
-                    .to_string(),
+                i18n::stale_server_body(),
                 false,
             );
         }
@@ -474,20 +485,20 @@ fn startup_stale_server_check(app: tauri::AppHandle) {
 pub fn request_hot_restart(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.quitting.load(Ordering::SeqCst) {
-        return Err("应用正在退出，无法热重启".to_string());
+        return Err(i18n::err_app_quitting());
     }
     if state.bridge.www_dir().is_none() {
-        return Err("主机尚未就绪，无法热重启".to_string());
+        return Err(i18n::err_host_not_ready());
     }
     if state.updating.load(Ordering::SeqCst) {
-        return Err("dsh 正在更新，请更新完成后再热重启".to_string());
+        return Err(i18n::err_update_in_progress());
     }
     if state
         .restarting
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return Err("热重启已在进行中".to_string());
+        return Err(i18n::err_restart_in_progress());
     }
 
     let app_handle = app.clone();
@@ -501,7 +512,7 @@ pub fn request_hot_restart(app: &tauri::AppHandle) -> Result<(), String> {
     let overlay_app = app.clone();
     std::thread::spawn(move || {
         if let Some(window) = overlay_app.get_webview_window(MAIN_WINDOW) {
-            let _ = window.eval(RESTART_OVERLAY_JS);
+            let _ = window.eval(&restart_overlay_js());
         }
     });
 
@@ -577,17 +588,17 @@ fn run_hot_restart(app: tauri::AppHandle) {
 pub fn shell_retry_startup(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.quitting.load(Ordering::SeqCst) {
-        return Err("应用正在退出，无法重试".to_string());
+        return Err(i18n::err_app_quitting());
     }
     if state.updating.load(Ordering::SeqCst) {
-        return Err("dsh 正在更新，请更新完成后再重试".to_string());
+        return Err(i18n::err_update_in_progress());
     }
     if state
         .restarting
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return Err("重试已在进行中".to_string());
+        return Err(i18n::err_restart_in_progress());
     }
 
     // Back to the spinner first: navigate to the plain loading URL so any
@@ -642,17 +653,17 @@ fn run_startup_retry(app: tauri::AppHandle) {
 pub fn reset_runtime(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.quitting.load(Ordering::SeqCst) {
-        return Err("应用正在退出，无法重置".to_string());
+        return Err(i18n::err_app_quitting());
     }
     if state.updating.load(Ordering::SeqCst) {
-        return Err("dsh 正在更新，请更新完成后再重置".to_string());
+        return Err(i18n::err_update_in_progress());
     }
     if state
         .restarting
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        return Err("重置/重启已在进行中".to_string());
+        return Err(i18n::err_restart_in_progress());
     }
 
     // Back to the spinner first (same as startup retry).
@@ -808,6 +819,7 @@ fn main() {
                 }
                 Err(error) => {
                     eprintln!("dsh-desktop: {error}");
+                    recovery::on_startup_failure(app.handle(), "host", &error);
                     bridge.set_ready_failed(error);
                 }
             }

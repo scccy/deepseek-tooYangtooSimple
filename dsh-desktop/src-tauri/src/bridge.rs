@@ -96,6 +96,15 @@ pub enum BridgeEvent {
     Pong {
         id: u64,
     },
+    /// Terminal answer to a `quit-inspection` request (sidecar).
+    QuitResult {
+        id: u64,
+        ready: bool,
+        running_tasks: bool,
+        scheduled_reminders: bool,
+        details: Value,
+        notes: String,
+    },
 }
 
 pub struct Bridge {
@@ -619,7 +628,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                     }
                 }
                 "pong" | "headers" | "chunk" | "end" | "error" | "ws-result" | "ws-send-result"
-                | "ws-close-result" => {
+                | "ws-close-result" | "quit-result" => {
                     let Some(id) = msg.get("id").and_then(Value::as_u64) else {
                         continue;
                     };
@@ -637,6 +646,24 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                     };
                     let event = match kind {
                         "pong" => BridgeEvent::Pong { id },
+                        "quit-result" => BridgeEvent::QuitResult {
+                            id,
+                            ready: msg.get("ready").and_then(Value::as_bool).unwrap_or(false),
+                            running_tasks: msg
+                                .get("runningTasks")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true),
+                            scheduled_reminders: msg
+                                .get("scheduledReminders")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            details: msg.get("details").cloned().unwrap_or_else(|| json!({})),
+                            notes: msg
+                                .get("notes")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        },
                         "end" => BridgeEvent::End { id },
                         "headers" => BridgeEvent::Headers {
                             id,
@@ -874,6 +901,11 @@ fn unix_now_secs() -> u64 {
 
 /// Readable UTC timestamp for log lines without pulling in a date crate.
 fn chrono_like_now() -> String {
+    utc_ts(unix_now_secs() as i64)
+}
+
+/// Readable UTC timestamp for log lines without pulling in a date crate.
+pub fn utc_timestamp_now() -> String {
     utc_ts(unix_now_secs() as i64)
 }
 

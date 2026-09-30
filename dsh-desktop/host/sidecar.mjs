@@ -216,7 +216,13 @@ function prepareSite({ webServer, clientModules, wwwDir }) {
   html = webServer.renderIndex(html);
   // dsh:// is a standard, secure origin: keep the dist's absolute paths and
   // only repoint plugin bundle URLs, exactly like the Windows app:// path.
-  html = html.replace(/\/plugins\//g, '/__plugins/');
+  // renderIndex 的 script-preload / bootstrap script-src 行以及 __DSH_BOOT__
+  // 图里的 url 都是相对形式（`plugins/??…`，无前导斜杠），旧正则
+  // `/\/plugins\//` 只匹配绝对路径，导致这些 URL 在 dsh:// 下落进静态
+  // fast path 而 404 —— 客户端模块图起不来（"HTML did not preload
+  // dsh-client-modules"），插件面板 / subagent 卡片 / 设置区全部失效。
+  // 这里按前置定界符匹配，同时覆盖绝对（/plugins/…）与相对（plugins/…）。
+  html = html.replace(/(["'=(\s:])plugins\//g, '$1__plugins/');
   html = html.replace(/(client\.js)\?rev=[0-9a-f]{12}/g, '$1');
   // The bridge must exist before any client module executes.
   html = html.replace(/<head>/i, '<head>\n<script src="/__tauri_bridge.js"></script>');
@@ -1067,11 +1073,213 @@ let ctx = null;
 let notificationDispose = null;
 let exiting = false;
 
+// ---------------------------------------------------------------------------
+// quit-inspection (ported from official desktop-host/src/quit-inspection.ts)
+// ---------------------------------------------------------------------------
+// Answers two facts before the shell quits:
+//   ① runningTasks         — live agents (incl. subagents / approval waits /
+//                            queued inbox) plus running|stopping jobs;
+//   ② scheduledReminders   — `schedule` family entries reported by the
+//                            `workspace/session-activity` waterfall for any
+//                            loaded session.
+// Any true → the shell shows a "confirm quit" dialog. On failure or timeout
+// with the Host booted, we answer ready=true + runningTasks=true (better a
+// spurious dialog than a silent exit). Hard frame deadline: 2s.
+const QUIT_FRAME_DEADLINE_MS = 1800;
+const QUIT_SERVICE_TIMEOUT_MS = 200;
+const QUIT_SCHEDULE_BUDGET_MS = 1200;
+const QUIT_SCHEDULE_PROBE_TIMEOUT_MS = 300;
+
+function quitAsArray(value, label) {
+  if (!Array.isArray(value)) throw new Error(`quit-inspection: ${label} returned unexpected shape`);
+  return value;
+}
+
+function quitIsActiveAgent(agent) {
+  return agent?.status === 'running'
+    || (agent?.inbox?.nextTurn?.length ?? 0) > 0
+    || (agent?.inbox?.nextStep?.length ?? 0) > 0;
+}
+
+function quitIsRunningJob(job) {
+  return job?.status === 'running' || job?.status === 'stopping';
+}
+
+function quitService(name) {
+  try {
+    const viaGet = ctx.get?.(name);
+    if (viaGet !== undefined) return viaGet;
+  } catch {
+    /* fall through to direct property access */
+  }
+  try {
+    return ctx[name];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Race `promise` against a timer; the loser's rejection stays handled. */
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  timer.unref?.();
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * One quit inspection pass. `hostReady` is captured by the caller before any
+ * await, so "not ready" and "mid-check failure" stay distinguishable.
+ * Failures inside the try are conservative (runningTasks=true); services
+ * missing before the check starts are "not ready" (ready=false).
+ */
+async function performQuitInspection(hostReady) {
+  const base = {
+    ready: hostReady,
+    runningTasks: false,
+    scheduledReminders: false,
+    details: { agents: 0, jobs: 0, reminders: 0 },
+  };
+  if (ctx === null) return { ...base, ready: false, notes: 'Host not booted' };
+  if (exiting) {
+    return { ...base, ready: true, runningTasks: true, notes: 'Host is stopping; assuming running tasks' };
+  }
+  const agents = quitService('agents');
+  const jobs = quitService('jobs');
+  if (agents === undefined || jobs === undefined) {
+    const missing = [agents === undefined ? 'agents' : null, jobs === undefined ? 'jobs' : null]
+      .filter(Boolean)
+      .join(', ');
+    return { ...base, ready: false, notes: `task services unavailable (${missing})` };
+  }
+
+  // From here the check is in progress: any failure falls through to the
+  // conservative "assume running tasks" answer below.
+  try {
+    const liveAgents = await withTimeout(
+      Promise.resolve(agents.list()).then((rows) => quitAsArray(rows, 'agents.list()')),
+      QUIT_SERVICE_TIMEOUT_MS,
+      'agents.list()',
+    );
+    const activeAgents = liveAgents.filter(quitIsActiveAgent);
+
+    const jobRows = [
+      await withTimeout(
+        Promise.resolve(jobs.list()).then((rows) => quitAsArray(rows, 'jobs.list()')),
+        QUIT_SERVICE_TIMEOUT_MS,
+        'jobs.list()',
+      ),
+    ];
+    for (const agent of liveAgents) {
+      jobRows.push(
+        await withTimeout(
+          Promise.resolve(jobs.list(agent?.id)).then((rows) => quitAsArray(rows, 'jobs.list(agent)')),
+          QUIT_SERVICE_TIMEOUT_MS,
+          'jobs.list(agent)',
+        ),
+      );
+    }
+    const runningJobs = jobRows.flat().filter(quitIsRunningJob);
+    const runningTasks = activeAgents.length > 0 || runningJobs.length > 0;
+
+    // schedule probe: the `schedule` family of `workspace/session-activity`.
+    // Only reminders of sessions loaded during this run can be armed.
+    let scheduledReminders = false;
+    let reminders = 0;
+    let scheduleNote = '';
+    if (typeof ctx.waterfall !== 'function') {
+      scheduleNote = 'schedule capability absent (no ctx.waterfall)';
+    } else {
+      const deadlineAt = Date.now() + QUIT_SCHEDULE_BUDGET_MS;
+      for (const agent of liveAgents) {
+        const remaining = deadlineAt - Date.now();
+        if (remaining <= 0) {
+          // Could not finish checking schedules: stay conservative.
+          throw new Error('schedule probe budget exhausted');
+        }
+        const activity = await withTimeout(
+          Promise.resolve(
+            ctx.waterfall('workspace/session-activity', { sessionId: agent?.id }, () => Promise.resolve([])),
+          ),
+          Math.min(QUIT_SCHEDULE_PROBE_TIMEOUT_MS, remaining),
+          'workspace/session-activity',
+        );
+        const entries = quitAsArray(activity, 'session-activity');
+        reminders += entries.filter((entry) => entry?.kind === 'schedule').length;
+        if (reminders > 0) {
+          scheduledReminders = true;
+          break;
+        }
+      }
+    }
+
+    return {
+      ready: true,
+      runningTasks,
+      scheduledReminders,
+      details: { agents: activeAgents.length, jobs: runningJobs.length, reminders },
+      notes: scheduleNote === '' ? 'ok' : scheduleNote,
+    };
+  } catch (error) {
+    const detail = error?.message ?? String(error);
+    return {
+      ...base,
+      ready: true,
+      runningTasks: true,
+      notes: `quit-inspection failed: ${detail}; assuming running tasks`,
+    };
+  }
+}
+
+/**
+ * Bridge frame handler: replies exactly one terminal `quit-result` frame —
+ * either the computed answer or a conservative timeout fallback — within the
+ * hard deadline, never throwing out of handleMessage.
+ */
+function handleQuitInspection(msg) {
+  const id = msg.id;
+  let replied = false;
+  const reply = (payload) => {
+    if (replied) return;
+    replied = true;
+    frame({ type: 'quit-result', id, ...payload });
+  };
+  const fallback = () => {
+    if (ctx !== null && !exiting) {
+      reply({
+        ready: true,
+        runningTasks: true,
+        scheduledReminders: false,
+        details: { agents: 0, jobs: 0, reminders: 0 },
+        notes: `quit-inspection timed out after ${QUIT_FRAME_DEADLINE_MS}ms; assuming running tasks`,
+      });
+    } else {
+      reply({
+        ready: false,
+        runningTasks: false,
+        scheduledReminders: false,
+        details: { agents: 0, jobs: 0, reminders: 0 },
+        notes: 'Host not ready when quit-inspection timed out',
+      });
+    }
+  };
+  const guard = setTimeout(fallback, QUIT_FRAME_DEADLINE_MS);
+  guard.unref?.();
+  performQuitInspection(ctx !== null && !exiting)
+    .then(reply, fallback)
+    .finally(() => clearTimeout(guard));
+}
+
 function handleMessage(msg) {
   if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) return;
   switch (msg.type) {
     case 'ping':
       frame({ type: 'pong', id: msg.id });
+      return;
+    case 'quit-inspection':
+      handleQuitInspection(msg);
       return;
     case 'fetch':
       handleFetch(msg);
