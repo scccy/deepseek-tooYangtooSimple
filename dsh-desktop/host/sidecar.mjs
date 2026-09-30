@@ -90,7 +90,7 @@ const HOME_PATCH_PATH = () => join(resolveDshHome(), PROFILE_PATCH_FILENAME);
 // without an app version bump.
 const ABOUT_PACKAGE = '@dsh-desktop/desktop-about';
 const ABOUT_VERSION = (dshenv('DSH_DESKTOP_APP_VERSION', 'DSH_MAC_APP_VERSION') ?? '0.0.0').trim() || '0.0.0';
-const ABOUT_BUNDLE_REVISION = 13;
+const ABOUT_BUNDLE_REVISION = 14;
 
 /** Write/refresh the desktop settings client bundle under the profile. */
 function ensureDesktopAboutBundle(profileDir) {

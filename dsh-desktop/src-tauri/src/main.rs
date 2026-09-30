@@ -760,6 +760,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             focus_main_window(app);
         }))
@@ -789,6 +790,8 @@ fn main() {
             commands::shell_set_notify_prefs,
             updater::shell_check_update,
             updater::shell_dsh_update,
+            updater::shell_check_app_update,
+            updater::shell_app_update,
             welcome::welcome_get_state,
             welcome::welcome_save_api_key,
             welcome::welcome_complete,
@@ -917,6 +920,7 @@ fn main() {
 
             watch_startup(app.handle().clone(), bridge);
             startup_update_check(app.handle().clone());
+            updater::startup_shell_update_check(app.handle().clone());
             startup_stale_server_check(app.handle().clone());
 
             if crate::envs::is_1("DSH_DESKTOP_DEBUG_UI", "DSH_MAC_DEBUG_UI") {

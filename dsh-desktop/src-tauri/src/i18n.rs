@@ -123,6 +123,8 @@ pub enum Text {
     RecoveryRestart,
     RecoveryDisablePlugins,
     CredentialExpiredTitle,
+    MandatoryDialogTitle,
+    MandatoryInstallButton,
 }
 
 pub fn text(key: Text) -> &'static str {
@@ -141,6 +143,8 @@ pub fn text(key: Text) -> &'static str {
             pick("禁用第三方插件并重启", "Disable third-party plugins and restart")
         }
         Text::CredentialExpiredTitle => pick("凭据已过期", "Credential expired"),
+        Text::MandatoryDialogTitle => pick("需要安装强制更新", "Mandatory update required"),
+        Text::MandatoryInstallButton => pick("立即安装", "Install now"),
     }
 }
 
@@ -248,4 +252,27 @@ pub fn credential_expired_body() -> String {
         "The API credential appears to have expired — update it in Settings → Models.",
     )
     .to_string()
+}
+
+pub fn shell_update_available_body(version: &str) -> String {
+    if matches!(locale(), Locale::Zh) {
+        format!("桌面版有新版本 v{version} 可用，可在设置的「应用更新」中安装")
+    } else {
+        format!("Desktop v{version} is available — install it from Settings → App update")
+    }
+}
+
+pub fn mandatory_overlay_text() -> &'static str {
+    pick(
+        "检测到强制更新，正在准备安装 …",
+        "A mandatory update is being prepared …",
+    )
+}
+
+pub fn mandatory_dialog_body(version: &str) -> String {
+    if matches!(locale(), Locale::Zh) {
+        format!("桌面版 v{version} 为强制更新，安装后应用将自动重启。")
+    } else {
+        format!("Desktop v{version} is a mandatory update. The app restarts after installation.")
+    }
 }

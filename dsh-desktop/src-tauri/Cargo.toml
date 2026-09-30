@@ -24,6 +24,9 @@ tauri-plugin-window-state = "2"
 rfd = "0.15"
 # Welcome window material (NSVisualEffectView / acrylic).
 window-vibrancy = "0.6"
+# Shell self-update (batch 3); endpoints/pubkey set programmatically so the
+# feature stays dormant until DSH_DESKTOP_UPDATER_ENDPOINT + a real key exist.
+tauri-plugin-updater = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

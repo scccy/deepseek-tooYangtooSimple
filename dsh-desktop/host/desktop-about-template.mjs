@@ -352,6 +352,72 @@ export function renderAboutClient(versionJson) {
       );
     }
 
+    function AppUpdateRow() {
+      var infoState = react.useState(null);
+      var info = infoState[0];
+      var setInfo = infoState[1];
+      var checkingState = react.useState(false);
+      var checking = checkingState[0];
+      var setChecking = checkingState[1];
+      var installingState = react.useState(false);
+      var installing = installingState[0];
+      var setInstalling = installingState[1];
+      var progressState = react.useState("");
+      var progress = progressState[0];
+      var setProgress = progressState[1];
+      react.useEffect(function () {
+        if (!installing) return;
+        var unlisten = listenNative("dsh:app-update-progress", function (event) {
+          var payload = event && event.payload ? event.payload : {};
+          if (payload.total) {
+            setProgress(Math.round((payload.received / payload.total) * 100) + "%");
+          } else {
+            setProgress((payload.received / 1024 / 1024).toFixed(1) + " MB");
+          }
+        });
+        return function () {
+          if (unlisten && typeof unlisten.then === "function") {
+            unlisten.then(function (dispose) { if (typeof dispose === "function") dispose(); });
+          } else if (typeof unlisten === "function") {
+            unlisten();
+          }
+        };
+      }, [installing]);
+      function runCheck() {
+        setChecking(true);
+        invokeNative("shell_check_app_update")
+          .then(function (raw) {
+            setInfo(typeof raw === "string" ? JSON.parse(raw) : raw);
+          })
+          .catch(function () { setInfo({ configured: false }); })
+          .then(function () { setChecking(false); });
+      }
+      function runInstall() {
+        setInstalling(true);
+        setProgress("");
+        invokeNative("shell_app_update").catch(function () { setInstalling(false); });
+      }
+      var summary = "点击「检查更新」检测桌面版新版本";
+      if (info) {
+        if (info.configured === false) summary = "未配置更新源";
+        else if (!info.available) summary = "已是最新版本 v" + (info.currentVersion || VERSION);
+        else summary = "发现新版本 v" + info.version + "（当前 v" + (info.currentVersion || VERSION) + "）";
+      }
+      return react.createElement("div", { style: rowStyle },
+        react.createElement("div", { style: titleStyle }, "应用更新 / App update"),
+        react.createElement("div", { style: valueStyle }, summary),
+        react.createElement("div", { style: subRowStyle },
+          react.createElement("div", { style: subTextStyle },
+            react.createElement("div", { style: subLabelStyle }, "下载并安装后自动重启"),
+            react.createElement("div", { style: subHintStyle },
+              progress ? "下载中 " + progress : "更新的是桌面壳本体，dsh 版本仍在上方管理")),
+          react.createElement("button", {
+            style: buttonStyle(checking || installing),
+            disabled: checking || installing,
+            onClick: installing ? runInstall : runCheck
+          }, installing ? (progress || "安装中…") : (info && info.available ? "立即更新" : "检查更新")))
+      );
+    }
     function NotificationsRow() {
       var prefsState = react.useState(null);
       var prefs = prefsState[0];
@@ -459,6 +525,11 @@ export function renderAboutClient(versionJson) {
         id: "desktop-dsh-update",
         order: 910
       }, DshUpdateRow));
+      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+        name: "settings.general.item",
+        id: "desktop-app-update",
+        order: 915
+      }, AppUpdateRow));
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
         id: "desktop-notifications",

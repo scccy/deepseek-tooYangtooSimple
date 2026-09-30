@@ -26,7 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::host;
@@ -471,4 +471,228 @@ mod tests {
         assert_eq!(prerelease_suffix("0.1.0-rc.7+build-2"), "rc.7");
         assert_eq!(prerelease_suffix("0.1.0"), "");
     }
+}
+// ---------------------------------------------------------------------------
+// shell self-update (batch 3): tauri-plugin-updater
+//
+// The shell (this Rust binary) updates itself through the plugin's signed
+// artifact flow, independent from the npm-based dsh update above. Feed
+// settings live in tauri.conf.json's plugins.updater section and can be
+// overridden with DSH_DESKTOP_UPDATER_ENDPOINT / DSH_DESKTOP_UPDATER_PUBKEY
+// (dev feeds). With neither configured the feature is dormant: checks report
+// `configured: false` and nothing runs at startup.
+//
+// Mandatory updates: our uploader writes a `mandatory: true` flag into
+// latest.json; the plugin exposes the feed document as `Update::raw_json`,
+// so we read the flag back without encoding tricks.
+// ---------------------------------------------------------------------------
+
+use tauri_plugin_updater::UpdaterExt;
+
+/// (endpoint templates, pubkey) or `None` when the updater is unconfigured.
+fn updater_settings(app: &AppHandle) -> Option<(Vec<tauri::Url>, String)> {
+    let section = app
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut endpoints: Vec<String> = section
+        .get("endpoints")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut pubkey = section
+        .get("pubkey")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if let Some(env) = crate::envs::var("DSH_DESKTOP_UPDATER_ENDPOINT", "DSH_MAC_UPDATER_ENDPOINT")
+    {
+        endpoints = env
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+    if let Some(env) = crate::envs::var("DSH_DESKTOP_UPDATER_PUBKEY", "DSH_MAC_UPDATER_PUBKEY") {
+        pubkey = env.trim().to_string();
+    }
+    if endpoints.is_empty() || pubkey.is_empty() {
+        return None;
+    }
+    let urls: Vec<tauri::Url> = endpoints
+        .drain(..)
+        .filter_map(|e| e.parse::<tauri::Url>().ok())
+        .collect();
+    if urls.is_empty() {
+        return None;
+    }
+    Some((urls, pubkey))
+}
+
+struct ShellUpdateInfo {
+    version: String,
+    notes: String,
+    mandatory: bool,
+}
+
+async fn check_shell_update(
+    app: &AppHandle,
+    endpoints: Vec<tauri::Url>,
+    pubkey: String,
+) -> Result<Option<ShellUpdateInfo>, String> {
+    let mut builder = app.updater_builder();
+    builder = builder.endpoints(endpoints).map_err(|e| e.to_string())?;
+    builder = builder.pubkey(pubkey);
+    let updater = builder.build().map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        None => Ok(None),
+        Some(update) => {
+            let mandatory = update
+                .raw_json
+                .get("mandatory")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(Some(ShellUpdateInfo {
+                version: update.version.clone(),
+                notes: update.body.clone().unwrap_or_default(),
+                mandatory,
+            }))
+        }
+    }
+}
+
+/// Manual check from the settings panel.
+#[tauri::command]
+pub async fn shell_check_app_update(app: AppHandle) -> Result<String, String> {
+    let Some((endpoints, pubkey)) = updater_settings(&app) else {
+        return Ok(json!({ "available": false, "configured": false }).to_string());
+    };
+    let current = app.package_info().version.to_string();
+    Ok(match check_shell_update(&app, endpoints, pubkey).await? {
+        None => json!({ "available": false, "configured": true, "currentVersion": current })
+            .to_string(),
+        Some(info) => json!({
+            "available": true,
+            "configured": true,
+            "currentVersion": current,
+            "version": info.version,
+            "notes": info.notes,
+            "mandatory": info.mandatory,
+        })
+        .to_string(),
+    })
+}
+
+/// Download + install + restart from the settings panel. Progress streams to
+/// `dsh:app-update-progress` ({received, total}) for the settings row.
+#[tauri::command]
+pub async fn shell_app_update(app: AppHandle) -> Result<String, String> {
+    run_shell_update(&app).await?;
+    Ok("restarting".to_string())
+}
+
+/// Startup silent check (once per launch, never blocks boot): surface a
+/// notification when a shell update exists; a `mandatory` feed entry blocks
+/// the workspace behind an overlay + single-button dialog and installs.
+pub fn startup_shell_update_check(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Some((endpoints, pubkey)) = updater_settings(&app) else {
+            return; // dormant
+        };
+        let info = match tauri::async_runtime::block_on(check_shell_update(&app, endpoints, pubkey))
+        {
+            Ok(Some(info)) => info,
+            Ok(None) => return, // up to date
+            Err(e) => {
+                eprintln!("dsh-desktop: shell update check: {e}");
+                return;
+            }
+        };
+        if info.mandatory {
+            install_mandatory(&app, &info.version);
+        } else if crate::bridge::GLOBAL_BRIDGE.get().is_some() {
+            crate::bridge::show_notification(
+                &app,
+                "DSH Desktop".to_string(),
+                crate::i18n::shell_update_available_body(&info.version),
+                false,
+            );
+        }
+    });
+}
+
+/// Mandatory install UX: block the page behind a full-viewport shutter, ask
+/// once with a single-button native dialog, install and restart. The dialog
+/// is single-action (no cancel path), matching the mandatory semantics.
+fn install_mandatory(app: &AppHandle, version: &str) {
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    if let Some(window) = app.get_webview_window(crate::MAIN_WINDOW) {
+        let overlay = crate::restart_overlay_js().replace(
+            &crate::i18n::restarting_overlay_text().to_string(),
+            crate::i18n::mandatory_overlay_text(),
+        );
+        let _ = window.eval(&overlay);
+        let _ = window.set_focus();
+    }
+    let result = MessageDialog::new()
+        .set_title(crate::i18n::text(crate::i18n::Text::MandatoryDialogTitle))
+        .set_description(crate::i18n::mandatory_dialog_body(version))
+        .set_level(MessageLevel::Warning)
+        .set_buttons(MessageButtons::OkCustom(
+            crate::i18n::text(crate::i18n::Text::MandatoryInstallButton).to_string(),
+        ))
+        .show();
+    if !matches!(result, MessageDialogResult::Ok | MessageDialogResult::Yes) {
+        // Dialog could not be shown (e.g. no dialog backend): retry on the
+        // next launch; keep the overlay so the outdated build stays unusable.
+        eprintln!("dsh-desktop: mandatory update dialog dismissed/failed; stays blocked");
+        return;
+    }
+    let handle = app.clone();
+    tauri::async_runtime::block_on(async move {
+        if let Err(e) = run_shell_update(&handle).await {
+            eprintln!("dsh-desktop: mandatory shell update failed: {e}");
+        }
+    });
+}
+
+/// Shared install body for the command and the mandatory flow.
+async fn run_shell_update(app: &AppHandle) -> Result<(), String> {
+    let Some((endpoints, pubkey)) = updater_settings(app) else {
+        return Err("updater not configured".to_string());
+    };
+    let mut builder = app.updater_builder();
+    builder = builder.endpoints(endpoints).map_err(|e| e.to_string())?;
+    builder = builder.pubkey(pubkey);
+    let updater = builder.build().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Err("no update available".to_string());
+    };
+    let version = update.version.clone();
+    let progress_app = app.clone();
+    update
+        .download_and_install(
+            move |received, total| {
+                use tauri::Emitter;
+                let _ = progress_app.emit(
+                    "dsh:app-update-progress",
+                    json!({ "received": received, "total": total }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    eprintln!("dsh-desktop: shell update {version} installed; restarting");
+    // app.restart() diverges (`!`): the shell relaunches with the new build.
+    app.restart()
 }
