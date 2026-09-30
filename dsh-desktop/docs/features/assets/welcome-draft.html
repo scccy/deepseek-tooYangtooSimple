@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<!-- Welcome 引导窗页面草稿（第二批用，最终由 site.rs 以 include_str! 内联为 /__welcome.html）。
+     契约（docs/features/batch2-welcome-window.md 同步）：
+       T.invoke('welcome_get_state')            -> {"locale":"zh"|"en","credential":{"configured":bool,"source":?,"writable":bool}}
+       T.invoke('welcome_save_api_key',{value}) -> {"ok":bool,"error"?}
+       T.invoke('welcome_complete',{action})    -> 关窗/进入主窗口，"later"|"enter"
+     视觉：跟随系统明暗（prefers-color-scheme），系统字体，无外部资源。 -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DSH Desktop</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 0; padding: 0 48px; box-sizing: border-box; }
+  .brand { font-size: 26px; font-weight: 300; letter-spacing: .5px; }
+  .sub { margin-top: 10px; font-size: 14px; opacity: .72; text-align: center; line-height: 1.6; }
+  .field { margin-top: 34px; width: 100%; max-width: 360px; }
+  input[type=password] { width: 100%; box-sizing: border-box; padding: 11px 13px;
+    font-size: 14px; border-radius: 8px; border: 1px solid rgba(127,127,140,.45);
+    background: transparent; color: inherit; outline: none; }
+  input[type=password]:focus { border-color: #7c8cff; }
+  .row { margin-top: 22px; display: flex; gap: 12px; width: 100%; max-width: 360px; }
+  button { flex: 1; padding: 11px 0; font-size: 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(127,127,140,.45); background: transparent; color: inherit; }
+  button.primary { background: #4f5bff; border-color: #4f5bff; color: #fff; }
+  button.primary:disabled, button.ghost:disabled { opacity: .55; cursor: default; }
+  #err { margin-top: 14px; font-size: 12px; color: #ff8a8a; min-height: 16px; text-align: center; }
+  #hint { margin-top: 40px; font-size: 12px; opacity: .55; }
+</style>
+</head>
+<body>
+  <div class="brand">DSH Desktop</div>
+  <div class="sub" id="sub"></div>
+  <div class="field">
+    <input id="key" type="password" autocomplete="new-password" placeholder="">
+  </div>
+  <div class="row">
+    <button class="primary" id="save"></button>
+    <button class="ghost" id="later"></button>
+  </div>
+  <div id="err"></div>
+  <div id="hint"></div>
+<script>
+  var T = window.__TAURI__ && window.__TAURI__.core;
+  var I18N = {
+    zh: {
+      sub: '配置 DeepSeek API Key 以开始使用。\n也可以稍后在设置的模型页中配置。',
+      placeholder: '粘贴 API Key（sk-…）', save: '保存并继续', later: '稍后配置',
+      saving: '正在保存…', errPrefix: '保存失败：', hint: 'Key 以引用形式存入本机凭据库，不会写进配置文件。'
+    },
+    en: {
+      sub: 'Enter your DeepSeek API key to get started.\nYou can also set it up later in Settings → Models.',
+      placeholder: 'Paste API key (sk-…)', save: 'Save & Continue', later: 'Set up later',
+      saving: 'Saving…', errPrefix: 'Save failed: ', hint: 'The key is stored as a reference in the local credential store, never in config files.'
+    }
+  };
+  var locale = 'zh';
+  function t() { return I18N[locale] || I18N.zh; }
+  function render() {
+    var s = t();
+    document.getElementById('sub').textContent = '';
+    document.getElementById('sub').innerText = s.sub;
+    document.getElementById('key').placeholder = s.placeholder;
+    document.getElementById('save').textContent = s.save;
+    document.getElementById('later').textContent = s.later;
+    document.getElementById('hint').textContent = s.hint;
+    document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
+  }
+  function busy(on) {
+    document.getElementById('save').disabled = on;
+    document.getElementById('later').disabled = on;
+    if (on) document.getElementById('save').textContent = t().saving;
+    else render();
+  }
+  function fail(msg) { document.getElementById('err').textContent = t().errPrefix + msg; busy(false); }
+
+  document.getElementById('save').onclick = function () {
+    var value = document.getElementById('key').value.trim();
+    if (!value) { fail(locale === 'zh' ? 'Key 为空' : 'key is empty'); return; }
+    busy(true); document.getElementById('err').textContent = '';
+    T.invoke('welcome_save_api_key', { value: value })
+      .then(function (raw) {
+        var res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (res && res.ok) return T.invoke('welcome_complete', { action: 'enter' });
+        fail(res && res.error ? res.error : 'unknown error');
+      })
+      .catch(fail);
+  };
+  document.getElementById('later').onclick = function () {
+    busy(true);
+    T.invoke('welcome_complete', { action: 'later' }).catch(function () { busy(false); });
+  };
+  document.getElementById('key').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') document.getElementById('save').click();
+  });
+
+  (function init() {
+    if (!T) return;
+    T.invoke('welcome_get_state').then(function (raw) {
+      var state = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (state && state.locale) locale = state.locale;
+      render();
+    }).catch(render);
+    render();
+  })();
+</script>
+</body>
+</html>
