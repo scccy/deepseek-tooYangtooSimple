@@ -83,6 +83,46 @@ export function renderAboutClient(versionJson) {
         react.createElement("div", { style: valueStyle }, "v" + VERSION)
       );
     }
+    function CredentialStatusRow() {
+      var expiredState = react.useState("");
+      var expired = expiredState[0];
+      var setExpired = expiredState[1];
+      var configState = react.useState(null);
+      var configured = configState[0];
+      var setConfigured = configState[1];
+      react.useEffect(function () {
+        invokeNative("welcome_get_state")
+          .then(function (raw) {
+            try {
+              var parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+              setConfigured(!!(parsed && parsed.credential && parsed.credential.configured));
+            } catch (e) { /* status stays unknown */ }
+          })
+          .catch(function () { /* status stays unknown */ });
+        var unlisten = listenNative("dsh:credential-expired", function () {
+          setExpired("expired");
+        });
+        return function () {
+          if (unlisten && typeof unlisten.then === "function") {
+            unlisten.then(function (dispose) { if (typeof dispose === "function") dispose(); });
+          } else if (typeof unlisten === "function") {
+            unlisten();
+          }
+        };
+      }, []);
+      var statusLabel = expired === "expired"
+        ? "已过期（请在模型页更新凭据）"
+        : configured === null
+          ? "未知"
+          : configured ? "已配置" : "未配置";
+      var statusColor = expired === "expired"
+        ? "#ff8a8a"
+        : configured === false ? "var(--dsw-alias-label-secondary, inherit)" : "inherit";
+      return react.createElement("div", { style: rowStyle },
+        react.createElement("div", { style: titleStyle }, "凭据状态 / Credential"),
+        react.createElement("div", { style: Object.assign({}, valueStyle, { color: statusColor }) }, statusLabel)
+      );
+    }
     function DshUpdateRow() {
       var infoState = react.useState(null);
       var info = infoState[0];
@@ -409,6 +449,11 @@ export function renderAboutClient(versionJson) {
         id: "desktop-version",
         order: 900
       }, VersionRow));
+      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+        name: "settings.general.item",
+        id: "desktop-credential-status",
+        order: 905
+      }, CredentialStatusRow));
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
         id: "desktop-dsh-update",

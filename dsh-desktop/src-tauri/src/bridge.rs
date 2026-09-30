@@ -807,6 +807,27 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                         .unwrap_or(false);
                     show_notification(&app, title.to_owned(), body.to_owned(), background_only);
                 }
+                "credential-state" => {
+                    // Batch 2 expiry detection: the sidecar's error pump flags
+                    // credential-shaped API failures; the workspace surfaces
+                    // the expiry banner (client bundle listens on this event).
+                    let state = msg.get("state").and_then(Value::as_str).unwrap_or("expired");
+                    let detail = msg.get("detail").and_then(Value::as_str).unwrap_or("");
+                    eprintln!("[dsh-host] credential-state: {state} {detail}");
+                    let _ = app.emit_to(
+                        "main",
+                        "dsh:credential-expired",
+                        json!({ "state": state, "detail": detail }),
+                    );
+                    // Guaranteed-visible surface: the workspace banner lives
+                    // in the settings panel, so also raise a native alert.
+                    show_notification(
+                        &app,
+                        crate::i18n::text(crate::i18n::Text::CredentialExpiredTitle).to_owned(),
+                        crate::i18n::credential_expired_body(),
+                        false,
+                    );
+                }
                 "exit" => {
                     if !bridge.finish_reader_generation(generation) {
                         break;

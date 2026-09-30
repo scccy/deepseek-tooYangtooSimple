@@ -90,7 +90,7 @@ const HOME_PATCH_PATH = () => join(resolveDshHome(), PROFILE_PATCH_FILENAME);
 // without an app version bump.
 const ABOUT_PACKAGE = '@dsh-desktop/desktop-about';
 const ABOUT_VERSION = (dshenv('DSH_DESKTOP_APP_VERSION', 'DSH_MAC_APP_VERSION') ?? '0.0.0').trim() || '0.0.0';
-const ABOUT_BUNDLE_REVISION = 12;
+const ABOUT_BUNDLE_REVISION = 13;
 
 /** Write/refresh the desktop settings client bundle under the profile. */
 function ensureDesktopAboutBundle(profileDir) {
@@ -967,6 +967,15 @@ let notifyPrefs = loadNotifyPrefs();
 // ---------------------------------------------------------------------------
 // native notifications (window-visible filtering happens on the Rust side)
 // ---------------------------------------------------------------------------
+/** Credential-shaped API failure: 401/403 or credential/authz keywords. */
+function isCredentialError(message) {
+  const text = String(message ?? '');
+  if (/\b40[13]\b/.test(text)) return true;
+  const lowered = text.toLowerCase();
+  return ['credential', 'unauthorized', 'forbidden', 'api key', 'apikey', 'authentication']
+    .some((needle) => lowered.includes(needle));
+}
+
 function installNotificationPumps() {
   const short = (id) => String(id).slice(0, 8);
   const disposers = [];
@@ -1032,13 +1041,21 @@ function installNotificationPumps() {
   }, { global: true }));
 
   // Transport-level session errors (the session controller re-emits agent
-  // errors with a stable message string).
+  // errors with a stable message string). Credential-shaped failures are
+  // additionally reported to the shell so the workspace can surface an
+  // expiry banner (batch 2 credential-expiry detection).
   disposers.push(ctx.on('api-session/error', (sessionId, message) => {
+    const text = String(message ?? '');
+    if (isCredentialError(text)) {
+      // Unconditional on purpose: an expired credential is actionable even
+      // when the user silenced error notifications.
+      frame({ type: 'credential-state', state: 'expired', detail: text.slice(0, 200) });
+    }
     if (!(notifyPrefs.enabled && notifyPrefs.error)) return;
     frame({
       type: 'notify',
       title: '会话错误',
-      body: String(message ?? '未知错误'),
+      body: text || '未知错误',
       backgroundOnly: false,
     });
   }, { global: true }));

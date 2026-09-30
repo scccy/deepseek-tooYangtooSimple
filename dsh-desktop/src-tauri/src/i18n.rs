@@ -122,6 +122,7 @@ pub enum Text {
     RecoveryExit,
     RecoveryRestart,
     RecoveryDisablePlugins,
+    CredentialExpiredTitle,
 }
 
 pub fn text(key: Text) -> &'static str {
@@ -139,6 +140,7 @@ pub fn text(key: Text) -> &'static str {
         Text::RecoveryDisablePlugins => {
             pick("禁用第三方插件并重启", "Disable third-party plugins and restart")
         }
+        Text::CredentialExpiredTitle => pick("凭据已过期", "Credential expired"),
     }
 }
 
@@ -238,4 +240,16 @@ mod tests {
         let body = update_available_body("0.8.0", "0.7.5");
         assert!(body.contains("0.8.0") && body.contains("0.7.5"));
     }
+}
+
+pub fn credential_expired_title() -> &'static str {
+    pick("凭据已过期", "Credential expired")
+}
+
+pub fn credential_expired_body() -> String {
+    pick(
+        "检测到 API 凭据失效，请在设置的模型页更新凭据。",
+        "The API credential appears to have expired — update it in Settings → Models.",
+    )
+    .to_string()
 }
