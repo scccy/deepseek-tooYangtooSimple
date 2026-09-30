@@ -145,7 +145,15 @@ pub fn enter_workspace(app: &AppHandle) {
     let first_entry = !ENTRY_DONE.swap(true, Ordering::SeqCst);
     if first_entry {
         if let Some(main) = app.get_webview_window(crate::MAIN_WINDOW) {
-            if let Ok(url) = crate::INDEX_URL.parse::<tauri::Url>() {
+            // First load must be the host's authenticated loopback URL (the
+            // webserver mints the session cookie there); dsh:// is only a
+            // fallback for a legacy portless host.
+            let dest = app
+                .try_state::<crate::AppState>()
+                .and_then(|state| state.bridge.ready())
+                .and_then(|ready| ready.url)
+                .unwrap_or_else(|| crate::INDEX_URL.to_string());
+            if let Ok(url) = dest.parse::<tauri::Url>() {
                 let _ = main.navigate(url);
             }
         }

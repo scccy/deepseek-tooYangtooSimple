@@ -326,27 +326,32 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-pub(crate) fn wait_for_bridge(bridge: &Arc<Bridge>, timeout: Duration) -> (bool, Option<String>) {
+pub(crate) fn wait_for_bridge(
+    bridge: &Arc<Bridge>,
+    timeout: Duration,
+) -> (bool, Option<String>, Option<String>) {
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(ready) = bridge.ready() {
             if let Some(error) = ready.error {
-                return (false, Some(error));
+                return (false, Some(error), None);
             }
-            if ready.www.is_some() {
-                return (true, None);
+            if ready.www.is_some() || ready.url.is_some() {
+                return (true, None, ready.url);
             }
         }
         if bridge.is_exited() {
             return (
                 false,
                 Some("host sidecar exited before becoming ready".to_string()),
+                None,
             );
         }
         if Instant::now() >= deadline {
             return (
                 false,
                 Some("host sidecar did not become ready in time".to_string()),
+                None,
             );
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -378,6 +383,7 @@ fn navigate_to_result(
     phase: &str,
     ready: bool,
     error: Option<String>,
+    url: Option<String>,
     cache_bust: bool,
 ) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
@@ -392,10 +398,24 @@ fn navigate_to_result(
             welcome::show_welcome(app);
             return;
         }
-        let dest = if cache_bust {
-            format!("{INDEX_URL}?dsh_restart={}", now_ms())
-        } else {
-            INDEX_URL.to_string()
+        // Official-style carrier: the host owns the authenticated loopback
+        // origin (http://127.0.0.1:19387/?token=…) and the webview's FIRST
+        // load is that URL — no cross-protocol hop from the dsh:// splash,
+        // which is what WebKitGTK needs to keep the SameSite=Strict session
+        // cookie minted by the 303. Every boot mints a fresh token, so hot
+        // restarts naturally load a different URL — no cache-busting hack
+        // needed. A host without a url (legacy portless bridge) still lands
+        // on the dsh:// site.
+        let dest = match url {
+            Some(authenticated) => {
+                if cache_bust {
+                    format!("{authenticated}&dsh_restart={}", now_ms())
+                } else {
+                    authenticated
+                }
+            }
+            None if cache_bust => format!("{INDEX_URL}?dsh_restart={}", now_ms()),
+            None => INDEX_URL.to_string(),
         };
         match dest.parse::<tauri::Url>() {
             Ok(url) => {
@@ -409,6 +429,10 @@ fn navigate_to_result(
                 let _ = window.reload();
             }
         }
+        // The window is created hidden while the host boots; reveal it only
+        // once the real site is loaded.
+        let _ = window.show();
+        let _ = window.set_focus();
     } else {
         let message = error.unwrap_or_else(|| "unknown startup failure".to_string());
         eprintln!("dsh-desktop: {phase}: host failed: {message}");
@@ -423,6 +447,9 @@ fn navigate_to_result(
         if let Ok(url) = format!("{LOADING_URL}#error={encoded}").parse::<tauri::Url>() {
             let _ = window.navigate(url);
         }
+        // Reveal the hidden boot window so the failure/recovery page is seen.
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -431,8 +458,8 @@ fn navigate_to_result(
 /// real site on success, or renders the failure on the splash page.
 fn watch_startup(app: tauri::AppHandle, bridge: Arc<Bridge>) {
     std::thread::spawn(move || {
-        let (ready, error) = wait_for_bridge(&bridge, Duration::from_secs(45));
-        navigate_to_result(&app, "startup", ready, error, false);
+        let (ready, error, url) = wait_for_bridge(&bridge, Duration::from_secs(45));
+        navigate_to_result(&app, "startup", ready, error, url, false);
     });
 }
 
@@ -562,8 +589,8 @@ fn respawn_host(
             bridge.set_ready_failed(error);
         }
     }
-    let (ready, error) = wait_for_bridge(bridge, Duration::from_secs(45));
-    navigate_to_result(app, phase, ready, error, cache_bust);
+    let (ready, error, url) = wait_for_bridge(bridge, Duration::from_secs(45));
+    navigate_to_result(app, phase, ready, error, url, cache_bust);
 }
 
 fn run_hot_restart(app: tauri::AppHandle) {
@@ -864,13 +891,18 @@ fn main() {
 
             setup_native_shell(app)?;
 
-            // Show the window immediately with a local splash page; the
-            // background watcher navigates once the host is ready. This keeps
-            // the run loop responsive instead of blocking on host boot.
-            let url: tauri::Url = LOADING_URL.parse().expect("valid custom-scheme url");
+            // The window stays hidden on a neutral about:blank while the host
+            // boots; it is revealed only after navigating to the host's
+            // authenticated loopback URL. The FIRST document must never be
+            // the dsh:// splash: WebKitGTK withholds the SameSite=Strict
+            // session cookie when the token exchange is reached through a
+            // cross-scheme navigation chain (dsh:// → http), and the webserver
+            // then 401s the main document (probe-verified on WebKitGTK).
+            let url: tauri::Url = "about:blank".parse().expect("valid url");
             let quitting_flag = state.quitting.clone();
-            let mut window_builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::CustomProtocol(url))
+            let mut window_builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::External(url))
                 .title("DSH Desktop")
+                .visible(false)
                 .inner_size(1440.0, 920.0)
                 .min_inner_size(960.0, 640.0);
             #[cfg(target_os = "macos")]
@@ -890,42 +922,23 @@ fn main() {
             window_builder = window_builder
                 .on_new_window(move |url, features| open_popup_window(&popup_handle, url, features));
 
-            // The shell owns its origin (dsh://) and never listens on
-            // 127.0.0.1:PORT, so any navigation to a loopback http(s) URL is a
-            // stray — e.g. the live SPA reconnecting to the portless mock
-            // server while a hot restart kills the sidecar, which resolves to
-            // http://127.0.0.1:0/. Block it and pull the webview back to the
-            // app page; every legitimate external destination is opened in the
-            // system browser via `shell_open_external` instead of navigating
-            // the shell.
-            let restarting_flag = state.restarting.clone();
-            let guard_handle = app.handle().clone();
+            // The app origin IS the host's authenticated loopback URL
+            // (http://127.0.0.1:19387) — the official-carrier model. Loopback
+            // http(s) navigations are the app itself; every other remote
+            // destination is a stray (legitimate externals open in the system
+            // browser via `shell_open_external`, never in the shell).
             window_builder = window_builder.on_navigation(move |url| {
                 match url.scheme() {
                     "dsh" | "about" | "blob" => return true,
                     "http" | "https" => {
                         let host = url.host_str().unwrap_or("");
                         if matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
-                            // While a restart is in flight, leave the splash
-                            // page alone: run_hot_restart navigates back to the
-                            // real site once the new host reports ready.
-                            if !restarting_flag.load(Ordering::SeqCst) {
-                                let handle = guard_handle.clone();
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(Duration::from_millis(20));
-                                    if let Some(window) = handle.get_webview_window(MAIN_WINDOW) {
-                                        if let Ok(url) = INDEX_URL.parse::<tauri::Url>() {
-                                            let _ = window.navigate(url);
-                                        }
-                                    }
-                                });
-                            }
-                            return false;
+                            return true;
                         }
                     }
                     _ => {}
                 }
-                true
+                false
             });
             // Chord listener (batch 4): resolves configured chords in-page and
             // dispatches accepted commands back through shell_dispatch_shortcut.
@@ -936,6 +949,28 @@ fn main() {
                     let _ = window.eval(&keybindings::chord_listener_js());
                 }
             });
+            // Official desktop marker: the client gates its desktop-only
+            // surfaces (account launcher menu, settings sections, transcript
+            // policy, product analytics) on `"dshDesktop" in globalThis`,
+            // which the official Electron preload exposes. Full native API
+            // parity (shortcuts/updates/deviceInfo) lands incrementally —
+            // account + settings flows travel the authenticated loopback
+            // origin like the official desktop.
+            window_builder = window_builder.initialization_script(r#"
+                if (!('dshDesktop' in globalThis)) {
+                    Object.defineProperty(globalThis, 'dshDesktop', {
+                        value: { protocolVersion: 1 },
+                        configurable: false,
+                        writable: false,
+                    });
+                }
+                if (!('dshDesktopBoot' in globalThis)) {
+                    globalThis.dshDesktopBoot = {
+                        ready: () => Promise.resolve(null),
+                        failed: (message) => console.error('[dshDesktopBoot]', message),
+                    };
+                }
+            "#);
             let window = window_builder.build()?;
 
             watch_startup(app.handle().clone(), bridge);

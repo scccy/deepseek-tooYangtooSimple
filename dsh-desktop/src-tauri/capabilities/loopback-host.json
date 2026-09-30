@@ -1,8 +1,16 @@
 {
   "$schema": "./gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default capability for the main webview window",
+  "identifier": "loopback-host",
+  "description": "Main window loading the host's authenticated loopback origin (http://127.0.0.1:19387) — official-carrier model. Remote contexts need every app command listed explicitly (Tauri v2 ACL).",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1",
+      "http://127.0.0.1:19387",
+      "http://localhost",
+      "http://localhost:19387"
+    ]
+  },
   "permissions": [
     "core:default",
     "notification:default",

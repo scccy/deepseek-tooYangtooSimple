@@ -31,6 +31,9 @@ const MAX_CHUNK_BIN_BYTES: u64 = 128 * 1024 * 1024;
 #[derive(Debug, Clone, Default)]
 pub struct ReadyInfo {
     pub www: Option<PathBuf>,
+    /// Authenticated loopback origin the webview must load (official-style
+    /// carrier: the host owns a real webserver on 127.0.0.1:19387).
+    pub url: Option<String>,
     pub error: Option<String>,
 }
 
@@ -239,12 +242,12 @@ impl Bridge {
         self.status.read().unwrap().clone()
     }
 
-    fn set_ready(&self, www: Option<PathBuf>, error: Option<String>) {
-        *self.ready.write().unwrap() = Some(ReadyInfo { www, error });
+    fn set_ready(&self, www: Option<PathBuf>, url: Option<String>, error: Option<String>) {
+        *self.ready.write().unwrap() = Some(ReadyInfo { www, url, error });
     }
 
     pub fn set_ready_failed(&self, error: String) {
-        self.set_ready(None, Some(error));
+        self.set_ready(None, None, Some(error));
     }
 
     fn next_id(&self) -> u64 {
@@ -571,7 +574,7 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
     }
 
     let Some(stdout) = io.stdout else {
-        bridge.set_ready(None, Some("no host stdout".to_string()));
+        bridge.set_ready(None, None, Some("no host stdout".to_string()));
         return;
     };
 
@@ -635,9 +638,14 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                         .and_then(Value::as_str)
                         .filter(|s| !s.is_empty())
                         .map(PathBuf::from);
+                    let url = msg
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned);
                     let error_text = msg.get("error").and_then(Value::as_str).map(str::to_owned);
                     let error_for_set = error_text.clone();
-                    bridge.set_ready(if ok { www } else { None }, error_for_set);
+                    bridge.set_ready(if ok { www } else { None }, if ok { url } else { None }, error_for_set);
                     if ok {
                         eprintln!("[dsh-host] ready");
                     } else {

@@ -13,6 +13,11 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": ""
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
@@ -27,9 +32,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../host/ipc-web-server.mjs": "host/ipc-web-server.mjs",
-      "../host/sidecar.mjs": "host/sidecar.mjs",
-      "../host/ws-ipc.mjs": "host/ws-ipc.mjs",
+      "../host/host.mjs": "host/host.mjs",
       "../host/desktop-pnpm.mjs": "host/desktop-pnpm.mjs",
       "../host/desktop-about-template.mjs": "host/desktop-about-template.mjs"
     },

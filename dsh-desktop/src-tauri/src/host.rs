@@ -442,7 +442,7 @@ pub fn resolve_host_script(app: &tauri::AppHandle) -> Option<PathBuf> {
         .parent()
         .unwrap()
         .join("host")
-        .join("sidecar.mjs");
+        .join("host.mjs");
     #[cfg(debug_assertions)]
     {
         if repo.is_file() {
@@ -452,8 +452,8 @@ pub fn resolve_host_script(app: &tauri::AppHandle) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(dir) = app.path().resource_dir() {
         // macOS: Contents/Resources；Windows: exe 目录。两种布局都探测。
-        candidates.push(dir.join("host").join("sidecar.mjs"));
-        candidates.push(dir.join("resources").join("host").join("sidecar.mjs"));
+        candidates.push(dir.join("host").join("host.mjs"));
+        candidates.push(dir.join("resources").join("host").join("host.mjs"));
     }
     candidates.push(repo);
 
@@ -504,20 +504,98 @@ pub struct SpawnedHost {
     pub child: Child,
 }
 
+/// Desktop host webserver port (must mirror host.mjs's resolution).
+fn desktop_port() -> u16 {
+    crate::envs::var("DSH_DESKTOP_PORT", "DSH_MAC_PORT")
+        .and_then(|v| v.trim().parse::<u16>().ok())
+        .unwrap_or(19387)
+}
+
+/// The host owns a REAL webserver on a fixed loopback port, so a stale host
+/// process (crashed shell, force-killed update, stray dev run) makes the next
+/// boot fail with an opaque EADDRINUSE from deep inside dsh. Before spawning,
+/// detect a busy port and terminate any of OUR OWN leftover host processes
+/// (matched by cmdline); a foreign listener is reported as a clear error.
+pub fn clear_stale_host_on_port() -> Result<(), String> {
+    use std::net::SocketAddr;
+    let port = desktop_port();
+    let Ok(addr) = format!("127.0.0.1:{port}").parse::<SocketAddr>() else {
+        return Ok(());
+    };
+    let port_busy = |addr: &SocketAddr| {
+        std::net::TcpStream::connect_timeout(addr, Duration::from_millis(250)).is_ok()
+    };
+    if !port_busy(&addr) {
+        return Ok(());
+    }
+    let mut victims: Vec<i32> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(pid) = name.parse::<i32>() else {
+                continue;
+            };
+            if pid == std::process::id() as i32 {
+                continue;
+            }
+            let Ok(cmd) = std::fs::read_to_string(format!("/proc/{pid}/cmdline")) else {
+                continue;
+            };
+            // /proc cmdline is NUL-separated; `contains` is the whole match.
+            if cmd.contains("node") && cmd.contains("host/host.mjs") {
+                victims.push(pid);
+            }
+        }
+    }
+    for pid in &victims {
+        unsafe {
+            libc::kill(*pid, libc::SIGTERM);
+        }
+    }
+    if !victims.is_empty() {
+        eprintln!(
+            "dsh-desktop: port {port} busy; terminated {} stale host process(es): {:?}",
+            victims.len(),
+            victims
+        );
+        for _ in 0..20 {
+            if !port_busy(&addr) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
+        for pid in &victims {
+            unsafe {
+                libc::kill(*pid, libc::SIGKILL);
+            }
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    if port_busy(&addr) {
+        return Err(format!(
+            "端口 {port} 被其它程序占用（不是 DSH Desktop 的宿主进程），请释放端口后重试"
+        ));
+    }
+    Ok(())
+}
+
 pub fn spawn_sidecar(app: &tauri::AppHandle, www_dir: &Path) -> Result<SpawnedHost, String> {
+    clear_stale_host_on_port()?;
     let node = resolve_node();
     check_node_version(&node)?;
     let dsh_root = resolve_dsh_root().ok_or_else(|| {
         "找不到全局安装的 @deepseek-ai/dsh，请先运行 npm i -g @deepseek-ai/dsh".to_string()
     })?;
     let script = resolve_host_script(app).ok_or_else(|| {
-        "找不到 host/sidecar.mjs（未随包分发且仓库布局缺失）".to_string()
+        "找不到 host/host.mjs（未随包分发且仓库布局缺失）".to_string()
     })?;
     // 二次防御：脚本必须存在且是带文件名的常规文件，否则给出可读错误
     // 而不是把坏路径（如 Windows 盘符根 `C:`）传给 node 崩掉。
     if script.file_name().is_none() || !script.is_file() {
         return Err(format!(
-            "host/sidecar.mjs 无效（{}），请重新安装桌面版",
+            "host/host.mjs 无效（{}），请重新安装桌面版",
             script.display()
         ));
     }
