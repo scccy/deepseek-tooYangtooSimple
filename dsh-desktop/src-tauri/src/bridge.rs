@@ -105,6 +105,26 @@ pub enum BridgeEvent {
         details: Value,
         notes: String,
     },
+    /// `credentials-describe` answer (welcome window).
+    CredentialsInfo {
+        id: u64,
+        configured: bool,
+        source: Option<String>,
+        writable: bool,
+        notes: String,
+    },
+    /// `credentials-set` answer (welcome window).
+    CredentialsResult {
+        id: u64,
+        ok: bool,
+        error: Option<String>,
+    },
+    /// `settings-get` answer (welcome window locale preference).
+    SettingsValue {
+        id: u64,
+        value: Value,
+        notes: String,
+    },
 }
 
 pub struct Bridge {
@@ -628,7 +648,8 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                     }
                 }
                 "pong" | "headers" | "chunk" | "end" | "error" | "ws-result" | "ws-send-result"
-                | "ws-close-result" | "quit-result" => {
+                | "ws-close-result" | "quit-result" | "credentials-info" | "credentials-result"
+                | "settings-value" => {
                     let Some(id) = msg.get("id").and_then(Value::as_u64) else {
                         continue;
                     };
@@ -658,6 +679,43 @@ pub fn spawn_reader(bridge: Arc<Bridge>, io: BridgeIo, app: AppHandle, log_path:
                                 .and_then(Value::as_bool)
                                 .unwrap_or(false),
                             details: msg.get("details").cloned().unwrap_or_else(|| json!({})),
+                            notes: msg
+                                .get("notes")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        },
+                        "credentials-info" => BridgeEvent::CredentialsInfo {
+                            id,
+                            configured: msg
+                                .get("configured")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            source: msg
+                                .get("source")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            writable: msg
+                                .get("writable")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            notes: msg
+                                .get("notes")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        },
+                        "credentials-result" => BridgeEvent::CredentialsResult {
+                            id,
+                            ok: msg.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                            error: msg
+                                .get("error")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                        },
+                        "settings-value" => BridgeEvent::SettingsValue {
+                            id,
+                            value: msg.get("value").cloned().unwrap_or(Value::Null),
                             notes: msg
                                 .get("notes")
                                 .and_then(Value::as_str)

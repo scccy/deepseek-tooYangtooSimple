@@ -1272,6 +1272,168 @@ function handleQuitInspection(msg) {
     .finally(() => clearTimeout(guard));
 }
 
+// ---------------------------------------------------------------------------
+// Welcome onboarding frames (batch 2): credentials + settings probes
+// ---------------------------------------------------------------------------
+// Three request frames used by the desktop shell's Welcome window:
+//   credentials-describe / credentials-set → the `ctx.credentials` seam
+//     (@deepseek-ai/dsh-credentials: describe()/set() over a CredentialRef);
+//   settings-get → the `ctx.settings` service (SettingsForms.describe()),
+//     reading dotted keys like `locale.preference` as `<namespace>.<field>`.
+// All three follow the quit-inspection contract: exactly one terminal frame
+// per request within a 2s hard deadline, conservative values when the Host is
+// not booted or the service is missing, and nothing ever thrown out of
+// handleMessage.
+const WELCOME_FRAME_DEADLINE_MS = 2000;
+
+// quit-inspection's ctx.get(name)/ctx[name] lookup pattern, reused verbatim.
+const getService = quitService;
+
+let credentialsModulePromise = null;
+function loadCredentialsModule() {
+  credentialsModulePromise ??= importPackage('@deepseek-ai/dsh-credentials');
+  return credentialsModulePromise;
+}
+
+/**
+ * Prefer the branded `credentialRef()` factory when the package exports it;
+ * fall back to a plain string ref (typeof-checked at runtime) so the frames
+ * keep working against builds without the named export.
+ */
+async function toCredentialRef(name) {
+  try {
+    const mod = await loadCredentialsModule();
+    if (typeof mod?.credentialRef === 'function') return mod.credentialRef(name);
+  } catch {
+    /* package import failed: plain string ref below still works at runtime */
+  }
+  return name;
+}
+
+/**
+ * Shared reply guard: exactly one terminal frame of `terminalType`, either
+ * from `work` or from `fallback(detail)` on rejection/timeout.
+ */
+function welcomeGuard(msg, terminalType, fallback) {
+  const id = msg.id;
+  let replied = false;
+  const reply = (payload) => {
+    if (replied) return;
+    replied = true;
+    frame({ type: terminalType, id, ...payload });
+  };
+  const guard = setTimeout(() => reply(fallback(`timed out after ${WELCOME_FRAME_DEADLINE_MS}ms`)), WELCOME_FRAME_DEADLINE_MS);
+  guard.unref?.();
+  const settle = (work) =>
+    Promise.resolve()
+      .then(work)
+      .then(reply, (error) => reply(fallback(error?.message ?? String(error))))
+      .finally(() => clearTimeout(guard));
+  return { reply, settle };
+}
+
+function handleCredentialsDescribe(msg) {
+  const fallback = (detail) => ({
+    configured: false,
+    source: null,
+    writable: false,
+    notes: ctx === null
+      ? `Host not booted; credentials service unavailable (${detail})`
+      : `credentials describe failed; reporting unconfigured (${detail})`,
+  });
+  const g = welcomeGuard(msg, 'credentials-info', fallback);
+  g.settle(async () => {
+    if (ctx === null) return fallback('Host not booted');
+    const credentials = getService('credentials');
+    if (!credentials || typeof credentials.describe !== 'function') {
+      return { configured: false, source: null, writable: false, notes: 'credentials service unavailable' };
+    }
+    const ref = await toCredentialRef(String(msg.ref ?? ''));
+    const info = await withTimeout(
+      Promise.resolve(credentials.describe(ref)),
+      WELCOME_FRAME_DEADLINE_MS,
+      'credentials.describe()',
+    );
+    return {
+      configured: info?.configured === true,
+      source: typeof info?.source === 'string' ? info.source : null,
+      writable: info?.writable === true,
+      notes: 'ok',
+    };
+  });
+}
+
+function handleCredentialsSet(msg) {
+  const fallback = (detail) => ({ ok: false, error: `credentials-set ${detail}` });
+  const g = welcomeGuard(msg, 'credentials-result', fallback);
+  g.settle(async () => {
+    // Rust side validates too; belt and braces.
+    if (typeof msg.value !== 'string' || msg.value === '') {
+      return { ok: false, error: 'value must be a non-empty string' };
+    }
+    if (ctx === null) return { ok: false, error: 'credentials service unavailable (Host not booted)' };
+    const credentials = getService('credentials');
+    if (!credentials || typeof credentials.set !== 'function') {
+      return { ok: false, error: 'credentials service unavailable' };
+    }
+    const ref = await toCredentialRef(String(msg.ref ?? ''));
+    await withTimeout(
+      Promise.resolve(credentials.set(ref, msg.value)),
+      WELCOME_FRAME_DEADLINE_MS,
+      'credentials.set()',
+    );
+    // Read back describe() to confirm the write landed; the frame stays ok
+    // even if the confirmation itself fails.
+    try {
+      const info = await withTimeout(
+        Promise.resolve(credentials.describe(ref)),
+        WELCOME_FRAME_DEADLINE_MS,
+        'credentials.describe()',
+      );
+      return { ok: true, error: null, notes: `ok; configured=${info?.configured === true}` };
+    } catch (error) {
+      const detail = error?.message ?? String(error);
+      return { ok: true, error: null, notes: `ok; configured state unknown (${detail})` };
+    }
+  });
+}
+
+function handleSettingsGet(msg) {
+  const fallback = (detail) => ({ value: null, notes: `settings-get failed (${detail})` });
+  const g = welcomeGuard(msg, 'settings-value', fallback);
+  g.settle(async () => {
+    const key = typeof msg.key === 'string' ? msg.key : '';
+    if (key === '') return { value: null, notes: 'settings-get failed: missing key' };
+    if (ctx === null) return { value: null, notes: 'Host not booted; settings service unavailable' };
+    const settings = getService('settings');
+    if (!settings || typeof settings.describe !== 'function') {
+      return { value: null, notes: 'settings service unavailable' };
+    }
+    // Key grammar: `<namespace>.<field path…>`, e.g. `locale.preference`.
+    const dot = key.indexOf('.');
+    const ns = dot === -1 ? key : key.slice(0, dot);
+    const path = dot === -1 ? [] : key.slice(dot + 1).split('.');
+    const rows = await withTimeout(
+      Promise.resolve(settings.describe()),
+      WELCOME_FRAME_DEADLINE_MS,
+      'settings.describe()',
+    );
+    if (!Array.isArray(rows)) return { value: null, notes: 'settings.describe() returned unexpected shape' };
+    const row = rows.find((entry) => entry?.ns === ns);
+    if (!row) return { value: null, notes: `settings namespace "${ns}" not found` };
+    let current = row.value;
+    for (const segment of path) {
+      if (current === null || typeof current !== 'object') {
+        current = undefined;
+        break;
+      }
+      current = current[segment];
+    }
+    if (current === undefined) return { value: null, notes: `key "${key}" not set` };
+    return { value: current, notes: 'ok' };
+  });
+}
+
 function handleMessage(msg) {
   if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) return;
   switch (msg.type) {
@@ -1280,6 +1442,15 @@ function handleMessage(msg) {
       return;
     case 'quit-inspection':
       handleQuitInspection(msg);
+      return;
+    case 'credentials-describe':
+      handleCredentialsDescribe(msg);
+      return;
+    case 'credentials-set':
+      handleCredentialsSet(msg);
+      return;
+    case 'settings-get':
+      handleSettingsGet(msg);
       return;
     case 'fetch':
       handleFetch(msg);

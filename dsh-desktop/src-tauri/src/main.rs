@@ -21,6 +21,7 @@ mod recovery;
 mod site;
 mod envs;
 mod updater;
+mod welcome;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,9 +51,9 @@ pub struct AppState {
     pub move_pos: Mutex<Option<(f64, f64)>>,
 }
 
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 const LOADING_URL: &str = "dsh://localhost/__loading.html";
-const INDEX_URL: &str = "dsh://localhost/index.html";
+pub(crate) const INDEX_URL: &str = "dsh://localhost/index.html";
 
 /// Default geometry for `window.open` popups that do not specify a size.
 const POPUP_INNER_WIDTH: f64 = 1024.0;
@@ -379,6 +380,13 @@ fn navigate_to_result(
     };
     if ready {
         eprintln!("dsh-desktop: {phase}: host ready");
+        // Batch 2: first boot with no configured credential -> welcome window
+        // instead of the workspace. Creation failure falls through so the
+        // user is never stranded on the splash.
+        if phase == "startup" && !welcome::entry_allowed(app) {
+            welcome::show_welcome(app);
+            return;
+        }
         let dest = if cache_bust {
             format!("{INDEX_URL}?dsh_restart={}", now_ms())
         } else {
@@ -781,6 +789,9 @@ fn main() {
             commands::shell_set_notify_prefs,
             updater::shell_check_update,
             updater::shell_dsh_update,
+            welcome::welcome_get_state,
+            welcome::welcome_save_api_key,
+            welcome::welcome_complete,
         ])
         .setup(move |app| {
             bridge::set_global(bridge_handle.clone());
