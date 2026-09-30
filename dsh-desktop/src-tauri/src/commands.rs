@@ -659,3 +659,51 @@ pub fn shell_set_notify_prefs(app: AppHandle, prefs: String) -> Result<(), Strin
         .send_direct(json!({ "type": "set-notify-prefs", "prefs": normalized }));
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// keyboard shortcuts (batch 4)
+// ---------------------------------------------------------------------------
+#[tauri::command]
+pub fn shell_dispatch_shortcut(app: AppHandle, command: String) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(crate::MAIN_WINDOW) else {
+        return Err("main window unavailable".to_string());
+    };
+    match command.as_str() {
+        "reloadPage" => window.eval("window.location.reload()").map_err(|e| e.to_string()),
+        "toggleDevtools" => {
+            if window.is_devtools_open() {
+                window.close_devtools();
+            } else {
+                window.open_devtools();
+            }
+            Ok(())
+        }
+        "minimize" => window.minimize().map_err(|e| e.to_string()),
+        // close-to-tray semantics: the shell never closes the page
+        "closePage" => window.hide().map_err(|e| e.to_string()),
+        "quit" => {
+            request_quit(&app);
+            Ok(())
+        }
+        other => Err(format!("unknown shortcut command: {other}")),
+    }
+}
+
+#[tauri::command]
+pub fn shell_get_keybindings(_app: AppHandle) -> Result<String, String> {
+    let bindings = crate::keybindings::snapshot();
+    let blocked = crate::keybindings::is_blocked();
+    Ok(json!({ "version": 1, "blocked": blocked, "bindings": bindings }).to_string())
+}
+
+#[tauri::command]
+pub fn shell_set_keybindings(app: AppHandle, bindings: String) -> Result<String, String> {
+    let parsed: Value =
+        serde_json::from_str(&bindings).map_err(|e| format!("invalid bindings: {e}"))?;
+    crate::keybindings::update(&app, &parsed).map(|v| v.to_string())
+}
+
+#[tauri::command]
+pub fn shell_restore_keybindings(app: AppHandle) -> Result<String, String> {
+    crate::keybindings::restore_all(&app).map(|v| v.to_string())
+}

@@ -16,6 +16,7 @@ mod bridge;
 mod commands;
 mod host;
 mod i18n;
+mod keybindings;
 mod notify;
 mod recovery;
 mod site;
@@ -241,8 +242,12 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
         .item(&select_all)
         .build()?;
 
+    let reload_accel = keybindings::snapshot()
+        .get("reloadPage")
+        .cloned()
+        .unwrap_or_else(|| "CmdOrCtrl+R".to_string());
     let reload = MenuItemBuilder::with_id("menu-reload", i18n::text(i18n::Text::MenuReload))
-        .accelerator("CmdOrCtrl+R")
+        .accelerator(&reload_accel)
         .build(app)?;
     let fullscreen = PredefinedMenuItem::fullscreen(app, None)?;
     let minimize = PredefinedMenuItem::minimize(app, None)?;
@@ -788,6 +793,10 @@ fn main() {
             commands::shell_diagnostics,
             commands::shell_get_notify_prefs,
             commands::shell_set_notify_prefs,
+            commands::shell_dispatch_shortcut,
+            commands::shell_get_keybindings,
+            commands::shell_set_keybindings,
+            commands::shell_restore_keybindings,
             updater::shell_check_update,
             updater::shell_dsh_update,
             updater::shell_check_app_update,
@@ -808,6 +817,8 @@ fn main() {
                 eprintln!("dsh-desktop: www dir failed: {error}");
             }
             log_preamble(app.handle(), &www_dir, &home);
+
+            keybindings::load(app.handle());
 
             let state = app.state::<AppState>();
             let bridge = state.bridge.clone();
@@ -915,6 +926,15 @@ fn main() {
                     _ => {}
                 }
                 true
+            });
+            // Chord listener (batch 4): resolves configured chords in-page and
+            // dispatches accepted commands back through shell_dispatch_shortcut.
+            // (Re-)injected after every document load, so hot restarts and
+            // SPA navigations keep it alive.
+            window_builder = window_builder.on_page_load(move |window, payload| {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    let _ = window.eval(&keybindings::chord_listener_js());
+                }
             });
             let window = window_builder.build()?;
 
