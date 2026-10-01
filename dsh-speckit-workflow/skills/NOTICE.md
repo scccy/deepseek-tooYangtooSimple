@@ -31,12 +31,28 @@ uvx --from specify-cli==1.0.13 specify init /tmp/ref --script py --integration c
 `speckit-constitution` backs the standalone Constitution page (outside the stage
 chain) and belongs to the same upstream set.
 
-`speckit-worktrees-create` is the one deviation: it is upstream's **worktrees
-extension** command (`worktrees:commands/speckit.worktrees.create.md`, as
-recorded in its frontmatter), promoted to a skill because the plugin has a
+`speckit-worktrees-create` is the one deviation: it is the **worktrees extension**
+command `speckit.worktrees.create` promoted to a skill, because the plugin has a
 dedicated `worktrees` stage. Upstream ships it as an extension rather than a base
-skill, and that extension is `discovery-only` in the community catalog (not
-installable via `specify extension add`), so it cannot be auto-refreshed.
+skill.
+
+Its body is kept **byte-identical to extension v1.3.2** (verified); only the YAML
+frontmatter is ours. That extension is `discovery-only` in the community catalog,
+so `specify extension add worktrees` refuses it — refresh from the tagged archive
+instead:
+
+```bash
+curl -sSL -o /tmp/wt.zip \
+  https://github.com/dango85/spec-kit-worktree-parallel/archive/refs/tags/v1.3.2.zip
+# then diff commands/speckit.worktrees.create.md in that zip against the body of
+# skills/speckit-worktrees-create/SKILL.md
+```
+
+Extension metadata: id `worktrees`, author `dango85`, MIT, requires spec-kit
+>= 0.4.0. The community page also advertises a `speckit.worktrees.specify`
+command that is **not** in the v1.3.2 archive — it comes from the repository's
+main branch and has no tagged release, so it is intentionally not vendored here.
+
 `speckit-worktrees-clean` and `speckit-worktrees-list` are intentionally not
 vendored: they are interactive maintenance tools, not pipeline phases.
 
