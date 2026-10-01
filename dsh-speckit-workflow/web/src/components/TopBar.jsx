@@ -49,7 +49,7 @@ export default function TopBar({
             className="btn"
             onClick={() => onInitWorkspace(workspace)}
             disabled={initializing || !workspace}
-            title="初始化当前工作区：拷贝内置 spec-kit 骨架生成 .specify/，并同步内置 skills（幂等，可重复执行）"
+            title="初始化当前工作区：执行官方 specify init 生成 .specify/（版本由插件钉死），并同步内置 skills（幂等，可重复执行）"
           >
             <Icon name="rotate" />
             {initializing ? '初始化中…' : '⚙ 初始化工作区'}

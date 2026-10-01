@@ -12,11 +12,13 @@
 // subagents / llm. The `@dsh-external/workflow` engine is no longer the
 // execution substrate — stage threads are independent agent sessions.
 
-import { mkdir, readFile, writeFile, cp } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { isAbsolute, join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { Ledger, DEFAULT_DB_PATH } from './db.js'
 import { Orchestrator, OrchestratorError } from './orchestrator.js'
@@ -30,7 +32,7 @@ export const RPC_CHANNEL = '/api/dsh-speckit-workflow'
 
 export const inject = ['tools', 'systemPrompt', 'agents', 'webServer', 'workspaceRegistry', 'subagents', 'llm']
 
-export const PLUGIN_VERSION = '0.8.2'
+export const PLUGIN_VERSION = '0.9.0'
 
 // 看板消息可投递进线程的阶段状态：活跃状态与「已暂停 / 已结束但仍是当前阶段」
 // 的终态。发送消息会把非 running 的行重新拉回 running，在同一个线程上继续，
@@ -62,8 +64,8 @@ function bundledSkillDir() {
   }
 }
 
-// 内置 spec-kit 骨架（vendored，版本与 skills/NOTICE.md 一致）：初始化工作区时
-// 原样拷贝为项目的 .specify/，不依赖外部 specify CLI。
+// 内置 spec-kit 骨架（vendored，spec-kit v0.16.4）。v0.9 起工作区初始化改走官方
+// `specify init`，此处仅作为「重置为模板」时读取 constitution 模板的离线兜底。
 function bundledSkeletonDir() {
   try {
     return fileURLToPath(new URL('../skeleton/', import.meta.url))
@@ -159,30 +161,98 @@ function constitutionTemplate() {
   }
 }
 
-// ---- workspace init（一键就绪：内置 spec-kit 骨架 + 内置 skills 同步）--------
-// 不依赖外部 specify CLI：骨架（templates + scripts，spec-kit v0.16.4，与内置
-// skills 同版本）随插件 vendored 在 skeleton/，初始化即原样拷贝为项目的
-// .specify/。幂等：重复执行覆盖骨架文件，不触碰 specs/、.specify/feature.json
-// 等运行期产物。
-const SKELETON_VERSION = '0.16.4'
+// ---- workspace init（官方 specify init + 内置 skills 同步）-------------------
+// 必须走官方初始化流程：只有 `specify init` 才会写入 workflows/、integration.json、
+// integrations/、init-options.json 与 .specify/.gitignore。缺了这些，spec-kit 自己
+// 就认不出这个项目有 SDD 工作流（`specify workflow list` 会返回
+// "No workflows installed."），后续阶段无法生成；同时缺 .specify/.gitignore 会让
+// 机器本地的 feature.json 变成工作区里的游离未跟踪文件。
+//
+// 版本由插件钉死，不跟随用户本机 CLI 漂移（内置 skills 即该版本产物）：优先用版本
+// 精确匹配的本地 CLI，否则用 uvx / pipx 按精确版本临时拉取。
+const SPECIFY_CLI_VERSION = '0.16.4'
+const SPECIFY_CLI_PACKAGE = 'specify-cli'
+const SPECIFY_INIT_TIMEOUT_MS = 10 * 60 * 1000
+const execFileAsync = promisify(execFile)
+
+async function runCapture(command, args, options = {}) {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, args, { encoding: 'utf8', ...options })
+    return { ok: true, stdout: String(stdout || '').trim(), stderr: String(stderr || '').trim() }
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { ok: false, missing: true, error }
+    return { ok: false, error }
+  }
+}
+
+const semverOf = (text) => (String(text || '').match(/(\d+\.\d+\.\d+)/) || [])[1]
+
+/** 按钉死版本解析出可执行的 specify 调用（命令 + 固定前缀参数）。 */
+async function resolvePinnedSpecify() {
+  const wanted = SPECIFY_CLI_VERSION
+  const local = await runCapture('specify', ['--version'])
+  const localVersion = local.ok ? semverOf(local.stdout) : undefined
+  // 本机 CLI 版本不符时故意不采用：初始化结果必须与内置 skills 同版本。
+  if (localVersion === wanted) {
+    return { command: 'specify', prefix: [], source: `local specify ${localVersion}` }
+  }
+  if ((await runCapture('uvx', ['--version'])).ok) {
+    return {
+      command: 'uvx',
+      prefix: ['--from', `${SPECIFY_CLI_PACKAGE}==${wanted}`, 'specify'],
+      source: `uvx ${SPECIFY_CLI_PACKAGE}==${wanted}`
+    }
+  }
+  if ((await runCapture('pipx', ['--version'])).ok) {
+    return {
+      command: 'pipx',
+      prefix: ['run', '--spec', `${SPECIFY_CLI_PACKAGE}==${wanted}`, 'specify'],
+      source: `pipx run --spec ${SPECIFY_CLI_PACKAGE}==${wanted}`
+    }
+  }
+  const mismatch = local.ok
+    ? `本机 specify 是 ${localVersion || '未知'}，与所需的 ${wanted} 不符。`
+    : ''
+  throw new OrchestratorError('specify-cli-missing',
+    `初始化工作区需要 spec-kit v${wanted}。${mismatch}请安装 uv（推荐：uvx 会按精确版本临时运行）`
+    + `或 pipx，或执行 \`uv tool install ${SPECIFY_CLI_PACKAGE}==${wanted}\`。`)
+}
 
 async function initWorkspace(root) {
-  const source = bundledSkeletonDir()
-  if (!source || !existsSync(join(source, 'templates'))) {
-    throw new OrchestratorError('skeleton-missing',
-      '插件包缺少内置 spec-kit 骨架（skeleton/），无法初始化工作区。请重新安装完整插件包。')
-  }
   const target = join(root, '.specify')
-  try {
-    await mkdir(target, { recursive: true })
-    await cp(source, target, { recursive: true, force: true })
-  } catch (error) {
+  const invocation = await resolvePinnedSpecify()
+  // --integration codex 只是让官方 init 写出 integration 元数据；它同步的
+  // .agents/skills/ 与插件内置 skills 逐字节相同，故不引入版本分歧。
+  const args = [...invocation.prefix, 'init', '--here', '--script', 'py',
+    '--integration', 'codex', '--ignore-agent-tools', '--force']
+  const result = await runCapture(invocation.command, args, {
+    cwd: root,
+    timeout: SPECIFY_INIT_TIMEOUT_MS,
+    maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, SPECIFY_INIT_DIR: root }
+  })
+  if (!result.ok) {
+    const detail = result.missing
+      ? `找不到可执行文件 ${invocation.command}`
+      : String((result.error && (result.error.stderr || result.error.message)) || result.error)
     throw new OrchestratorError('init-failed',
-      `骨架拷贝失败（${root}）：${String((error && error.message) || error)}`)
+      `specify init 失败（${invocation.source}）：${detail}`)
+  }
+  if (!existsSync(join(target, 'templates'))) {
+    throw new OrchestratorError('init-failed',
+      `specify init 未生成 .specify/templates（${root}）`)
   }
   await ensureProjectSkills(root)
   const issues = checkProject(root)
-  return { ready: issues.length === 0, issues, skeleton: `spec-kit v${SKELETON_VERSION} (bundled)`, output: `copied bundled spec-kit v${SKELETON_VERSION} skeleton -> ${target}` }
+  if (!existsSync(join(target, 'workflows', 'workflow-registry.json'))) {
+    issues.push('specify init 未注册 SDD 工作流（.specify/workflows/workflow-registry.json 缺失）')
+  }
+  return {
+    ready: issues.length === 0,
+    issues,
+    skeleton: `spec-kit v${SPECIFY_CLI_VERSION} (official init via ${invocation.source})`,
+    output: `specify init (${invocation.source}) -> ${target}`
+  }
 }
 
 function projectEntries(ctx, current) {
@@ -402,8 +472,8 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
     }
 
     case 'workspace-init': {
-      // 一键初始化目标工作区：内置 spec-kit 骨架（.specify/）+ 内置 skills 同步。
-      // 公开发布场景：装完插件即用，不依赖外部 specify CLI。
+      // 一键初始化目标工作区：官方 `specify init`（版本由插件钉死）+ 内置 skills 同步。
+      // 必须走官方流程，否则 workflows/、integration.json 等元数据缺失，spec-kit 不认这个项目。
       let workspacePath = typeof input.workspacePath === 'string' && input.workspacePath.length > 0 ? input.workspacePath : null
       if (!workspacePath) {
         try { workspacePath = projectCwd(parentAgent) } catch { workspacePath = null }

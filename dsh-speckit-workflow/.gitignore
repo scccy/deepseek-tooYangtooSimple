@@ -1,0 +1,7 @@
+# spec-kit 初始化产物：由 workspace-init（官方 specify init，版本钉死在
+# lib/index.js 的 SPECIFY_CLI_VERSION）按需生成，可随时重建，不进版本库。
+/.specify/
+
+# 前端依赖与构建缓存（bundle-dist 例外，见仓库根 .gitignore —— 它是运行时必需品）
+/web/node_modules/
+/web/dist/

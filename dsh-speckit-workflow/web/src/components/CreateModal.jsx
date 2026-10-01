@@ -122,7 +122,7 @@ export default function CreateModal({ open, onClose, workspace, projects = [], m
                         type="button"
                         className="btn"
                         style={{ flex: 'none', height: 26, padding: '0 12px', fontSize: 12 }}
-                        title="拷贝插件内置 spec-kit 骨架生成 .specify/，并同步内置 skills 到 .dsh/speckit-workflow/skills/（无需外部 specify CLI）"
+                        title="执行官方 specify init 生成 .specify/（spec-kit 版本由插件钉死，需 uv/pipx 或版本匹配的本地 CLI），并同步内置 skills 到 .dsh/speckit-workflow/skills/"
                         disabled={loading}
                         onClick={() => onInitWorkspace(workspace)}
                       >

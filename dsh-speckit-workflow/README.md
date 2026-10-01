@@ -36,14 +36,30 @@ Feature 工作流实例（一个 Feature 一条看板卡片）
 ## Prerequisites
 
 1. DSH `web` profile（Node ≥ 22.5 优先使用内置 `node:sqlite`）。
-2. **spec-kit `.specify` 骨架**（templates + python 脚本）——**无需手动准备**：
-   骨架已随插件内置（`skeleton/`，spec-kit v0.16.4，与内置 skills 同版本），
-   新建 Feature 弹窗对未就绪工作区点「⚙ 初始化工作区」即自动拷贝并同步内置
-   skills，**不依赖外部 `specify` CLI**。手动等价操作仍可用：
+2. **spec-kit `.specify` 骨架**（templates + scripts + workflows 元数据）——由插件
+   自动准备，但**必须走官方 `specify init`**：只有它会写入 `workflows/`、
+    `integration.json`、`integrations/`、`init-options.json` 与 `.specify/.gitignore`。
+   缺了这些，spec-kit 自己就认不出项目里有 SDD 工作流（`specify workflow list`
+   返回 `No workflows installed.`），后续阶段无法生成。
+
+   新建 Feature 弹窗对未就绪工作区点「⚙ 初始化工作区」即自动执行官方
+   `specify init --here --script py --integration codex --ignore-agent-tools`
+   并同步内置 skills。**插件把 spec-kit 版本钉死在 `SPECIFY_CLI_VERSION`
+   （当前 v0.16.4，与内置 skills 同版本）**，不跟随本机 CLI 漂移：
+
+   - 本机 `specify` 版本**精确匹配**时直接使用；
+   - 否则用 `uvx --from specify-cli==<pinned>`（推荐，需装 [uv](https://docs.astral.sh/uv/)）
+     或 `pipx run --spec specify-cli==<pinned>` 按精确版本临时拉取；
+   - 三者皆不可用时初始化会明确报错并给出安装指引。
 
    ```bash
-   specify init --here --script py      # 可选；skills 随插件内置，无需 --skills
+   # 手动等价操作（版本必须与 SPECIFY_CLI_VERSION 一致）
+   uvx --from specify-cli==0.16.4 specify init --here --script py \
+       --integration codex --ignore-agent-tools
    ```
+
+   注：官方 init 同步到 `.agents/skills/` 的 skills 与插件内置 skills 逐字节相同，
+   属预期内的重复副本。
 
 3. **subagent 提供者**（可 spawn durable continuable 线程）已注册，例如
    `subagent-spawn`（agent-teams 同款依赖）；插件在 `install` 端点报告其可用性。
@@ -95,7 +111,7 @@ bash scripts/sync-to-profile.sh
 
 ```text
 instances        → 看板投影 { cwd, projects, columns, instances[] }
-workspace-init   → 一键初始化工作区：拷贝内置 spec-kit 骨架 + 内置 skills 同步 → { ready, issues, skeleton }
+workspace-init   → 一键初始化工作区：官方 specify init（版本由插件钉死）+ 内置 skills 同步 → { ready, issues, skeleton }
 instance-create  → 建实例 + 启动 Specify 线程 → { instanceId, stageId, threadId }
 instance-get     → 全部阶段/产物/决策/事件 + 当前线程消息 + 每个阶段允许的操作
 instance-cancel  → 删除整个 Feature 实例（取消活动阶段 + 释放工作区锁，idempotent by actionId）
