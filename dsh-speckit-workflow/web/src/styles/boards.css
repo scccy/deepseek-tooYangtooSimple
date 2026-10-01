@@ -61,6 +61,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .btn-primary:hover { background: #70d7c7; color: #071411; }
 .btn-danger { border-color: #6e3a3a; color: #f0a3a3; }
 .btn-danger:hover { border-color: #a35050; color: #ffd4d4; }
+.btn-active { border-color: #3f9d91; color: var(--teal); }
 .btn-approve { border-color: #2b6a58; color: #8de2be; }
 .btn-approve:hover { border-color: #3f9d7e; color: #c8ffe9; }
 
@@ -470,3 +471,22 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .spkb-ctx button:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
 .spkb-ctx svg { width: 14px; height: 14px; color: var(--teal); }
+
+/* ---- Constitution 管理页 ---- */
+.constitution-page {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  gap: 14px; padding: 18px 22px; overflow: hidden;
+}
+.constitution-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.constitution-title { display: flex; align-items: center; gap: 9px; font-size: 18px; font-weight: 700; color: var(--text); }
+.constitution-title svg { width: 20px; height: 20px; color: var(--teal); }
+.constitution-sub { margin-top: 6px; color: var(--muted); font-size: 12.5px; }
+.constitution-sub .mono { color: #8fb6c4; }
+.constitution-dirty { color: #e0b86a; }
+.constitution-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.constitution-loading { flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
+.constitution-editor {
+  flex: 1; min-height: 0; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px; line-height: 1.6; resize: none;
+}
+.constitution-editor textarea { height: 100% !important; tab-size: 2; }

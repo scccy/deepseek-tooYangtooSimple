@@ -12,7 +12,7 @@
 // subagents / llm. The `@dsh-external/workflow` engine is no longer the
 // execution substrate — stage threads are independent agent sessions.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, cp } from 'node:fs/promises'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -30,7 +30,7 @@ export const RPC_CHANNEL = '/api/dsh-speckit-workflow'
 
 export const inject = ['tools', 'systemPrompt', 'agents', 'webServer', 'workspaceRegistry', 'subagents', 'llm']
 
-export const PLUGIN_VERSION = '0.8.0'
+export const PLUGIN_VERSION = '0.8.2'
 
 // 看板消息可投递进线程的阶段状态：活跃状态与「已暂停 / 已结束但仍是当前阶段」
 // 的终态。发送消息会把非 running 的行重新拉回 running，在同一个线程上继续，
@@ -49,13 +49,24 @@ const BUNDLED_SKILLS = {
   analyze: 'speckit-analyze',
   taskstoissues: 'speckit-taskstoissues',
   implement: 'speckit-implement',
-  converge: 'speckit-converge'
+  converge: 'speckit-converge',
+  constitution: 'speckit-constitution'
 }
 const PROJECT_SKILL_DIR = '.dsh/speckit-workflow/skills'
 
 function bundledSkillDir() {
   try {
     return fileURLToPath(new URL('../skills/', import.meta.url))
+  } catch {
+    return null
+  }
+}
+
+// 内置 spec-kit 骨架（vendored，版本与 skills/NOTICE.md 一致）：初始化工作区时
+// 原样拷贝为项目的 .specify/，不依赖外部 specify CLI。
+function bundledSkeletonDir() {
+  try {
+    return fileURLToPath(new URL('../skeleton/', import.meta.url))
   } catch {
     return null
   }
@@ -118,6 +129,60 @@ function checkProject(root) {
 function projectEntry(ctx, root) {
   const issues = checkProject(root)
   return { path: root, title: root.split('/').filter(Boolean).pop() || root, ready: issues.length === 0, issues }
+}
+
+// ---- constitution 管理（独立页面，不进流水线）-------------------------------
+const CONSTITUTION_REL = join('.specify', 'memory', 'constitution.md')
+
+function constitutionPath(workspacePath) {
+  return join(workspacePath, CONSTITUTION_REL)
+}
+
+function resolveConstitutionWorkspace(payload, parentAgent) {
+  let workspacePath = typeof payload.workspacePath === 'string' && payload.workspacePath.length > 0 ? payload.workspacePath : null
+  if (!workspacePath) {
+    try { workspacePath = projectCwd(parentAgent) } catch { workspacePath = null }
+  }
+  if (!workspacePath) {
+    throw new OrchestratorError('bad-request', '缺少目标工作区路径（workspacePath）')
+  }
+  return workspacePath
+}
+
+// 从 vendored 骨架里读取 constitution 模板，作为「重置为模板」的默认值。
+function constitutionTemplate() {
+  try {
+    const path = join(bundledSkeletonDir(), 'templates', 'constitution-template.md')
+    return readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+// ---- workspace init（一键就绪：内置 spec-kit 骨架 + 内置 skills 同步）--------
+// 不依赖外部 specify CLI：骨架（templates + scripts，spec-kit v0.16.4，与内置
+// skills 同版本）随插件 vendored 在 skeleton/，初始化即原样拷贝为项目的
+// .specify/。幂等：重复执行覆盖骨架文件，不触碰 specs/、.specify/feature.json
+// 等运行期产物。
+const SKELETON_VERSION = '0.16.4'
+
+async function initWorkspace(root) {
+  const source = bundledSkeletonDir()
+  if (!source || !existsSync(join(source, 'templates'))) {
+    throw new OrchestratorError('skeleton-missing',
+      '插件包缺少内置 spec-kit 骨架（skeleton/），无法初始化工作区。请重新安装完整插件包。')
+  }
+  const target = join(root, '.specify')
+  try {
+    await mkdir(target, { recursive: true })
+    await cp(source, target, { recursive: true, force: true })
+  } catch (error) {
+    throw new OrchestratorError('init-failed',
+      `骨架拷贝失败（${root}）：${String((error && error.message) || error)}`)
+  }
+  await ensureProjectSkills(root)
+  const issues = checkProject(root)
+  return { ready: issues.length === 0, issues, skeleton: `spec-kit v${SKELETON_VERSION} (bundled)`, output: `copied bundled spec-kit v${SKELETON_VERSION} skeleton -> ${target}` }
 }
 
 function projectEntries(ctx, current) {
@@ -334,6 +399,69 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
         ledger.updateInstance(tx, fresh)
       })
       return { ok: true, value: { exec: { mode, size } } }
+    }
+
+    case 'workspace-init': {
+      // 一键初始化目标工作区：内置 spec-kit 骨架（.specify/）+ 内置 skills 同步。
+      // 公开发布场景：装完插件即用，不依赖外部 specify CLI。
+      let workspacePath = typeof input.workspacePath === 'string' && input.workspacePath.length > 0 ? input.workspacePath : null
+      if (!workspacePath) {
+        try { workspacePath = projectCwd(parentAgent) } catch { workspacePath = null }
+      }
+      if (!workspacePath) {
+        throw new OrchestratorError('bad-request', '缺少目标工作区路径（workspacePath）')
+      }
+      const result = await initWorkspace(workspacePath)
+      return { ok: true, value: { cwd: workspacePath, ...result } }
+    }
+
+    // ---- constitution 管理（不进流水线，独立页面）---------------------------
+    // 读取/写入 .specify/memory/constitution.md（initWorkspace 已生成）。
+    case 'constitution': {
+      const workspacePath = resolveConstitutionWorkspace(payload, parentAgent)
+      const file = join(workspacePath, 'constitution.md'.replace('constitution.md', '.specify/memory/constitution.md'))
+      const exists = existsSync(file)
+      let text = ''
+      if (exists) {
+        try { text = await readFile(file, 'utf8') } catch (error) {
+          throw new OrchestratorError('bad-request', `constitution 不可读: ${String((error && error.message) || error)}`)
+        }
+      }
+      return { ok: true, value: { path: '.specify/memory/constitution.md', workspacePath, exists, text, template: constitutionTemplate() } }
+    }
+
+    case 'constitution-save': {
+      const workspacePath = resolveConstitutionWorkspace(payload, parentAgent)
+      const text = typeof payload.text === 'string' ? payload.text : ''
+      if (!text.trim()) throw new OrchestratorError('bad-request', 'constitution 内容不能为空')
+      const file = join(workspacePath, '.specify/memory/constitution.md')
+      try {
+        await mkdir(join(workspacePath, '.specify/memory'), { recursive: true })
+        await writeFile(file, text, 'utf8')
+      } catch (error) {
+        throw new OrchestratorError('bad-request', `constitution 写入失败: ${String((error && error.message) || error)}`)
+      }
+      return { ok: true, value: { path: '.specify/memory/constitution.md', workspacePath, exists: true, saved: true } }
+    }
+
+    // 用内置 speckit-constitution skill 重新生成/更新（独立 continuable 线程，
+    // 不写流水线阶段、不触发 failed 态）：用户可在 ThreadModal 里继续对话。
+    case 'constitution-regen': {
+      const workspacePath = resolveConstitutionWorkspace(payload, parentAgent)
+      const issues = checkProject(workspacePath)
+      if (issues.length > 0) {
+        throw new OrchestratorError('not-ready', `该工作区不是 speckit 就绪项目（${workspacePath}）：\n- ${issues.join('\n- ')}`)
+      }
+      const parentAgentRef = parentAgent
+      if (!parentAgentRef) throw new OrchestratorError('bad-request', '缺少父会话，无法派生 constitution 生成线程')
+      const args = typeof payload.args === 'string' ? payload.args : ''
+      const threadId = await threads.runAdhocSkill({
+        parentAgent: parentAgentRef,
+        workspacePath,
+        skillId: 'speckit-constitution',
+        args
+      })
+      return { ok: true, value: { threadId, workspacePath, skill: 'speckit-constitution' } }
     }
 
     case 'instance-create': {
@@ -587,6 +715,18 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
         ledger.appendEvents(tx, [orchestrator.event(instance.instance_id, 'stage-message', { stageId: stageRow.stage_id, attempt: stageRow.attempt, threadId: stageRow.thread_id }, stageRow.thread_id)])
       })
       return { ok: true, value: { delivered: true, threadId: stageRow.thread_id, status: 'running' } }
+    }
+
+    // 向任意线程（含非流水线 adhoc 线程，如 constitution-regen）投递消息，
+    // 不要求 ledger 阶段行。仅用于独立 skill 线程的续对话。
+    case 'thread-send': {
+      const threadId = typeof payload.threadId === 'string' ? payload.threadId.trim() : ''
+      if (!threadId) throw new OrchestratorError('bad-request', 'threadId is required')
+      const text = String(payload.text || '').trim()
+      if (!text) throw new OrchestratorError('bad-request', '消息内容不能为空')
+      if (!parentAgent) throw new OrchestratorError('bad-request', '缺少父会话，无法投递消息')
+      await threads.followup(parentAgent, threadId, text, 'adhoc-relay')
+      return { ok: true, value: { delivered: true, threadId, status: 'running' } }
     }
 
     case 'thread-pause': {
@@ -910,9 +1050,9 @@ export function apply(ctx) {
         const agent = exec.agent
         if (!agent) throw new Error('speckit_sdd requires a calling agent')
         const root = resolveProjectRoot(typeof args.projectPath === 'string' ? args.projectPath : undefined, projectCwd(agent))
-        await ensureProjectSkills(root)
         const issues = checkProject(root)
         if (issues.length > 0) throw new Error(`selected project is not speckit-ready (${root}):\n- ${issues.join('\n- ')}`)
+        await ensureProjectSkills(root)
         const config = {}
         if (args.useWorktrees === false) config.useWorktrees = false
         if (args.runChecklist === false) config.runChecklist = false
@@ -1067,4 +1207,4 @@ export function apply(ctx) {
   }, 'dsh-speckit-workflow: dispose')
 }
 
-export { Ledger, Orchestrator, StageThreads }
+export { Ledger, Orchestrator, StageThreads, initWorkspace }

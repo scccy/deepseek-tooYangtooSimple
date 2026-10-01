@@ -241,6 +241,40 @@ export class StageThreads {
     return this.orchestrator.currentStageRow(instance.instance_id, stageRow.stage_id)
   }
 
+  /**
+   * 非流水线的独立技能线程（用于 Constitution 重新生成等）。
+   * 复用与阶段线程相同的 continuable provider，但不写 ledger 阶段行，
+   * 因此不会触发 failed 态；UI 通过 ThreadModal 直接挂到该线程继续对话。
+   * @returns {Promise<string>} child thread id
+   */
+  async runAdhocSkill({ parentAgent, workspacePath, skillId, args = '' }) {
+    const skillSource = await this.skillSource(workspacePath, skillId)
+    const skillSha256 = createHash('sha256').update(skillSource).digest('hex')
+    this.providerDescriptor()
+
+    const persona = [
+      `You are a skill execution thread inside DeepSeek Harness, running the Spec Kit skill "${skillId}".`,
+      `Workspace: ${workspacePath} — ALL of your file work happens inside this directory.`,
+      `User input for this skill: ${args && args.trim() ? args : '(none — use the skill’s own defaults and any existing project constitution)'}`,
+      '',
+      `Follow the vendored Spec Kit skill below. It is the authoritative behavior.`,
+      '',
+      `---- SKILL: ${skillId} ----`,
+      skillSource,
+      `---- END SKILL ----`
+    ].join('\n')
+
+    const request = {
+      prompt: [{ type: 'text', text: `Now execute the ${skillId} skill for this project. Begin working now; use your file tools inside the workspace.` }],
+      parent: parentAgent,
+      persona,
+      toolFilter: { deny: [TOOL_NAME_DENY] },
+      agentOptions: undefined
+    }
+    const start = await this.subagents.startContinuable({ provider: this.provider, label: `speckit-adhoc:${skillId}`, request, signal: this._signal })
+    return start.childId
+  }
+
   /** Prior stage rows (excluding the current row) for prompt context. */
   priorStageRows(instanceId, currentStageRowId) {
     return this.ledger.transaction((tx) => {

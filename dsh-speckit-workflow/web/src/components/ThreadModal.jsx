@@ -27,7 +27,7 @@ const STAGE_TEXT = {
   skipped: '已跳过'
 }
 
-export default function ThreadModal({ open, thread, busy, onClose, onSendAnswer, onPauseThread, onResumeThread, onRefresh }) {
+export default function ThreadModal({ open, thread, busy, onClose, onSendAnswer, onAdhocMessage, onPauseThread, onResumeThread, onRefresh }) {
   const [value, setValue] = useState('')
   const [stickBottom, setStickBottom] = useState(true)
   const chatRef = useRef(null)
@@ -62,6 +62,12 @@ export default function ThreadModal({ open, thread, busy, onClose, onSendAnswer,
   const send = () => {
     const text = value.trim()
     if (!text) return
+    if (adhoc && onAdhocMessage) {
+      onAdhocMessage(text)
+      setValue('')
+      setStickBottom(true)
+      return
+    }
     onSendAnswer(text, 'answer')
     setValue('')
     setStickBottom(true)
@@ -70,15 +76,18 @@ export default function ThreadModal({ open, thread, busy, onClose, onSendAnswer,
   if (!thread) return null
 
   const stageStatus = stageRow ? stageRow.status : null
-  const title = `线程 · ${stageRow ? `${stageRow.stageId}#${stageRow.attempt}` : ''}`
+  const adhoc = !stageRow
+  const title = `线程 · ${stageRow ? `${stageRow.stageId}#${stageRow.attempt}` : '独立 skill 线程'}`
   const dotClass = STAGE_DOT[stageStatus] || 'done'
-  const statusText = STAGE_TEXT[stageStatus] || (stageStatus || '未知')
-  const canInteract = ['running', 'awaiting-user', 'awaiting-confirmation', 'paused', 'completed', 'failed', 'cancelled'].includes(stageStatus)
+  const statusText = STAGE_TEXT[stageStatus] || (adhoc ? 'skill 执行中' : '未知')
+  const canInteract = adhoc || ['running', 'awaiting-user', 'awaiting-confirmation', 'paused', 'completed', 'failed', 'cancelled'].includes(stageStatus)
   const interactive = stageRow && (stageRow.stageId === 'clarify' || stageRow.stageId === 'converge')
   const executing = stageStatus === 'running'
   const paused = stageStatus === 'paused'
 
-  const composerHint = executing
+  const composerHint = adhoc
+    ? '可以继续追问，线程会再执行一个回合'
+    : executing
     ? '线程正在执行，可随时「暂停」；回复会自动接续到线程'
     : paused
       ? '线程已暂停：可「继续执行」恢复本次执行，或直接发消息在同一个线程上继续'

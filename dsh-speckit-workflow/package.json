@@ -1,6 +1,6 @@
 {
   "name": "dsh-speckit-workflow",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "description": "DSH Feature 工作台 (v0.8): Speckit SDD 按 Feature 实例逐阶段创建线程，每个阶段停在人工确认点，Clarify/Converge 在同线程内多轮交互；由本地 SQLite 编排账本 + durable continuable 阶段线程驱动。视觉沿用已定版的 v0.7 看板风格。",
   "type": "module",
   "main": "lib/index.js",
@@ -36,6 +36,7 @@
     "web/bundle-dist/board.js",
     "cordis.patch.yml",
     "skills/",
+    "skeleton/",
     "README.md",
     "DESIGN-V0.8.md",
     "LICENSE"

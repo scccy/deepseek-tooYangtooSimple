@@ -34,6 +34,11 @@ for (const skill of SKILLS) {
   if (text.trim().length === 0) throw new Error(`vendored skill ${skill} is empty`)
 }
 console.log('[ok] vendored skills present:', SKILLS.length)
+for (const rel of ['skeleton/templates/spec-template.md', 'skeleton/scripts/python/check_prerequisites.py', 'skeleton/scripts/python/create_new_feature.py', 'skeleton/memory/constitution.md']) {
+  const text = await fs.readFile(join(root, rel), 'utf8')
+  if (text.trim().length === 0) throw new Error(`bundled skeleton file ${rel} is empty`)
+}
+console.log('[ok] bundled spec-kit skeleton present (skeleton/)')
 const stages = await import(join(root, 'lib/stages.js'))
 if (stages.STAGE_ORDER.length !== 9) throw new Error('stage graph must have 9 stages')
 if (stages.COLUMNS.length !== 4) throw new Error('board must have 4 columns')

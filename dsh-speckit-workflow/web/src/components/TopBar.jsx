@@ -5,12 +5,17 @@ export default function TopBar({
   title = 'Spec 流水线看板 · Feature 工作台',
   cwd,
   workspace,
+  version,
   onWorkspaceChange,
+  onInitWorkspace,
+  initializing,
   projects = [],
   worktreeCount,
   instanceCount,
   onNewFeature,
-  onCloseBoard
+  onCloseBoard,
+  view = 'board',
+  onViewChange
 }) {
   const options = projects.map((p) => ({
     value: p.path,
@@ -23,6 +28,7 @@ export default function TopBar({
         <div className="topbar-meta">
           <Icon name="folder" />
           <span className="mono">{workspace || cwd || '…'}</span>
+          {version && <span className="mono" style={{ opacity: 0.6, fontSize: 11 }}>· v{version}</span>}
         </div>
       </div>
       <div className="topbar-right">
@@ -34,10 +40,21 @@ export default function TopBar({
           <Icon name="cpu" />
           <span>{instanceCount}</span> 实例
         </span>
-        <span className="metric-pill">
+        <span className="metric-pill" title="插件版本（宿主动态上报，刷新后即为当前安装版本）">
           <Icon name="rotate" />
-          v0.8
+          {version ? `v${version}` : 'v0.8'}
         </span>
+        {onInitWorkspace && (
+          <button
+            className="btn"
+            onClick={() => onInitWorkspace(workspace)}
+            disabled={initializing || !workspace}
+            title="初始化当前工作区：拷贝内置 spec-kit 骨架生成 .specify/，并同步内置 skills（幂等，可重复执行）"
+          >
+            <Icon name="rotate" />
+            {initializing ? '初始化中…' : '⚙ 初始化工作区'}
+          </button>
+        )}
         <Select
           className="spkb-monoselect"
           value={workspace || undefined}
@@ -54,6 +71,14 @@ export default function TopBar({
         <button className="btn btn-primary" onClick={onNewFeature}>
           <Icon name="plus" />
           新建 Feature
+        </button>
+        <button
+          className={`btn ${view === 'constitution' ? 'btn-active' : ''}`}
+          onClick={() => onViewChange && onViewChange(view === 'constitution' ? 'board' : 'constitution')}
+          title="管理项目 Constitution（.specify/memory/constitution.md）"
+        >
+          <Icon name="book" />
+          📜 Constitution
         </button>
       </div>
     </header>

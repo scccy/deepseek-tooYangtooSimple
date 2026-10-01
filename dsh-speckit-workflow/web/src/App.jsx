@@ -3,6 +3,7 @@ import { callHost, requestExitBoard, threadTail } from './api/index.js'
 import { CONFIRM_NEXT, EXEC_MODES, nextStageWithConfig, phaseLabel, previousPhaseStart } from './lib/constants.js'
 import TopBar from './components/TopBar.jsx'
 import Board from './components/Board.jsx'
+import ConstitutionPage from './components/ConstitutionPage.jsx'
 import CreateModal from './components/CreateModal.jsx'
 import InstanceDrawer from './components/InstanceDrawer.jsx'
 import ThreadModal from './components/ThreadModal.jsx'
@@ -105,6 +106,7 @@ export default function App({ initialWorkspace = null }) {
   const [board, setBoard] = useState(null)
   const [workspace, setWorkspace] = useState(initialWorkspace || null)
   const [models, setModels] = useState(null)
+  const [pluginVersion, setPluginVersion] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [detail, setDetail] = useState(null)
@@ -114,6 +116,7 @@ export default function App({ initialWorkspace = null }) {
   const [dlg, setDlg] = useState(null)
   const [ctxPos, setCtxPos] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [view, setView] = useState('board')
 
   const workspaceRef = useRef(initialWorkspace || null)
   const instanceIdRef = useRef(null)
@@ -229,6 +232,28 @@ export default function App({ initialWorkspace = null }) {
     setThreadOpen(false)
   }, [])
 
+  // 非流水线线程（如 constitution-regen）：只有 threadId，没有 stageRow。
+  // ThreadModal 对缺 stageRow 的线程只展示对话（不显示阶段动作/状态协议）。
+  const openAdhocThread = useCallback(async (threadId) => {
+    if (!threadId) return
+    try {
+      const history = await fetchThreadHistory(threadId)
+      const messages = (history && Array.isArray(history.messages)) ? history.messages : []
+      setThread({ threadId, messages, stageRow: null, state: null })
+      setThreadOpen(true)
+      tailSeqRef.current = 0
+      const tail = await threadTail(threadId, 0)
+      if (tail) {
+        tailSeqRef.current = Number(tail.nextSeq) || 0
+        setThread((current) => (current && current.threadId === threadId
+          ? { ...current, messages: applyThreadEvents([], Array.isArray(tail.events) ? tail.events : []) }
+          : current))
+      }
+    } catch (error) {
+      showToast(String((error && error.message) || error))
+    }
+  }, [showToast])
+
   const handleWorkspaceChange = useCallback((value) => {
     workspaceRef.current = value
     setWorkspace(value)
@@ -242,6 +267,7 @@ export default function App({ initialWorkspace = null }) {
   useEffect(() => {
     void (async () => {
       try { setModels(await callHost('models')) } catch { /* optional */ }
+      try { setPluginVersion((await callHost('install')).version) } catch { /* optional */ }
       try { await refreshBoard() } catch { /* noop */ }
     })()
   }, [refreshBoard])
@@ -537,6 +563,21 @@ export default function App({ initialWorkspace = null }) {
     }
   }, [run, showToast, refreshDetail])
 
+  // 非流水线线程（constitution-regen 等）的消息投递：走专用 thread-send 通道。
+  const sendAdhocMessage = useCallback(async (text) => {
+    const threadId = threadRef.current && threadRef.current.threadId
+    if (!threadId) return
+    try {
+      await callHost('thread-send', { threadId, text })
+      showToast('已发送到线程')
+      setThread((current) => current
+        ? { ...current, messages: [...(current.messages || []), { key: 'me-' + Date.now(), who: 'user', text, at: Date.now() }] }
+        : current)
+    } catch (error) {
+      showToast(String((error && error.message) || error))
+    }
+  }, [showToast])
+
   // ---- artifact ----------------------------------------------------------------
   const readArtifact = useCallback(async (path) => {
     const instanceId = instanceIdRef.current
@@ -551,6 +592,18 @@ export default function App({ initialWorkspace = null }) {
   }, [askConfirm, showToast])
 
   // ---- create -------------------------------------------------------------------
+  const initWorkspace = useCallback(async (wsPath) => {
+    if (!wsPath) return
+    try {
+      const value = await run(() => callHost('workspace-init', { input: { workspacePath: wsPath } }))
+      if (value && value.ready) showToast('工作区已初始化（specify 骨架 + 内置 skills 已同步）')
+      else showToast(`初始化完成，但仍未就绪：${((value && value.issues) || []).join('；')}`)
+      await refreshBoard()
+    } catch (error) {
+      showToast(`初始化失败：${error.message}`)
+    }
+  }, [run, refreshBoard, showToast])
+
   const submitCreate = useCallback(async (input) => {
     try {
       const result = await run(() => callHost('instance-create', { input }))
@@ -602,23 +655,36 @@ export default function App({ initialWorkspace = null }) {
       <TopBar
         cwd={(board && board.cwd) || null}
         workspace={workspace}
+        version={pluginVersion}
         onWorkspaceChange={handleWorkspaceChange}
+        onInitWorkspace={initWorkspace}
+        initializing={busy}
         projects={projects}
         worktreeCount={worktreeCount}
         instanceCount={instances.length}
         onNewFeature={() => setCreateOpen(true)}
         onCloseBoard={onCloseBoard}
+        view={view}
+        onViewChange={setView}
       />
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }} onContextMenu={onBoardContextMenu}>
-        <Board
-          instances={instances}
-          busy={busy}
-          onOpenInstance={openInstance}
-          onConfirmStage={confirmStageFromCard}
-          onDeleteInstance={deleteInstanceFromCard}
-          onRollbackStage={rollbackStageFromCard}
-          onResumeInstance={resumeInstanceFromCard}
-        />
+        {view === 'constitution' ? (
+          <ConstitutionPage
+            workspace={workspace}
+            onOpenThread={openAdhocThread}
+            onToast={showToast}
+          />
+        ) : (
+          <Board
+            instances={instances}
+            busy={busy}
+            onOpenInstance={openInstance}
+            onConfirmStage={confirmStageFromCard}
+            onDeleteInstance={deleteInstanceFromCard}
+            onRollbackStage={rollbackStageFromCard}
+            onResumeInstance={resumeInstanceFromCard}
+          />
+        )}
       </div>
 
       <CreateModal
@@ -628,6 +694,7 @@ export default function App({ initialWorkspace = null }) {
         projects={projects}
         models={models}
         onSubmit={submitCreate}
+        onInitWorkspace={initWorkspace}
         loading={busy}
       />
 
@@ -649,6 +716,7 @@ export default function App({ initialWorkspace = null }) {
         busy={busy}
         onClose={closeThread}
         onSendAnswer={sendAnswer}
+        onAdhocMessage={sendAdhocMessage}
         onPauseThread={pauseThread}
         onResumeThread={resumeThread}
         onRefresh={() => thread && thread.stageRow && openThread(thread.stageRow.id, threadStageId)}

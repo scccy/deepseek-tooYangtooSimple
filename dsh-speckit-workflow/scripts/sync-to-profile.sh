@@ -13,10 +13,14 @@ if [[ -h "$TARGET" ]]; then
   rm "$TARGET"
 fi
 mkdir -p "$TARGET"
+# 注意：排除模式必须锚定根目录（/scripts），否则会连带排除 skeleton/scripts
+# （内置 spec-kit 骨架的脚本），导致初始化出的 .specify 缺 python/bash 脚本。
 rsync -a --delete \
-  --exclude '.git' \
-  --exclude 'scripts' \
-  --exclude 'node_modules' \
+  --exclude '/.git' \
+  --exclude '/scripts' \
+  --exclude '/node_modules' \
+  --exclude '/web/node_modules' \
+  --exclude '/web/dist' \
   "$PROJECT/" "$TARGET/"
 
 # Ensure the profile bundle actually lists this package (dependency + bundles
@@ -27,12 +31,13 @@ if [ ! -x "$NODE_BIN" ] && [ -x /Volumes/soft/lan/nodejs/v24/bin/node ]; then
   NODE_BIN="/Volumes/soft/lan/nodejs/v24/bin/node"
 fi
 if [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then
-  "$NODE_BIN" - "$PROFILE/package.json" <<'NODEJS'
+  "$NODE_BIN" - "$PROFILE/package.json" "$PROJECT" <<'NODEJS'
 const fs = require('fs')
 const file = process.argv[2]
+const project = process.argv[3]
 const p = JSON.parse(fs.readFileSync(file, 'utf8'))
 p.dependencies = p.dependencies || {}
-p.dependencies['dsh-speckit-workflow'] = 'file:/Volumes/project/github/dsh/dsh-speckit-workflow'
+p.dependencies['dsh-speckit-workflow'] = 'file:' + project
 p.dsh = p.dsh || {}
 p.dsh.profile = p.dsh.profile || {}
 if (!Array.isArray(p.dsh.profile.bundles)) p.dsh.profile.bundles = []

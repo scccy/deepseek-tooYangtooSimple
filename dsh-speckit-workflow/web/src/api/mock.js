@@ -36,6 +36,7 @@ const state = {
   instances: buildInstances().map((inst) => ({ ...inst, exec: { ...DEFAULT_EXEC, ...(inst.exec || {}) } })),
   projects: PROJECTS,
   cwd: CWD,
+  constitution: '',
   _rowSeq: 1000,
   _nextRowId() { return this._rowSeq++ }
 }
@@ -383,11 +384,48 @@ const assertInstance = (instanceId) => {
 }
 
 export const api = {
-  async install() { await delay(40); return { ok: true, version: '0.8.0', mock: true } },
+  async install() { await delay(40); return { ok: true, version: '0.8.2', mock: true } },
 
   async workspaces() { await delay(); return { projects: state.projects } },
 
   async check() { await delay(); return { ok: true, subagent: { available: true, provider: 'mock-spawn' }, skills: 10 } },
+
+  async workspaceInit({ input } = {}) {
+    await delay(600)
+    const root = (input && input.workspacePath) || state.cwd
+    // mock：把目标工作区（若在种子列表里）翻转为就绪，模拟宿主跑完 specify init + skills 同步
+    const entry = state.projects.find((p) => p.path === root)
+    if (entry) { entry.ready = true; entry.issues = [] }
+    return { cwd: root, ready: true, issues: [], skeleton: 'spec-kit v0.16.4 (bundled)', output: '[mock] copied bundled skeleton -> .specify/' }
+  },
+
+  async constitution() {
+    await delay()
+    const template = '# [PROJECT_NAME] Constitution\n\n## Core Principles\n\n### [PRINCIPLE_1_NAME]\n[PRINCIPLE_1_DESCRIPTION]\n'
+    return {
+      path: '.specify/memory/constitution.md',
+      workspacePath: state.cwd,
+      exists: true,
+      text: state.constitution || template,
+      template
+    }
+  },
+
+  async constitutionSave({ text } = {}) {
+    await delay(120)
+    state.constitution = typeof text === 'string' ? text : ''
+    return { path: '.specify/memory/constitution.md', workspacePath: state.cwd, exists: true, saved: true }
+  },
+
+  async constitutionRegen({ args } = {}) {
+    await delay(200)
+    return { threadId: `mock-constitution-${Date.now()}`, workspacePath: state.cwd, skill: 'speckit-constitution' }
+  },
+
+  async threadSend({ threadId, text } = {}) {
+    await delay(80)
+    return { delivered: true, threadId: threadId || 'mock', status: 'running' }
+  },
 
   async models() {
     await delay()

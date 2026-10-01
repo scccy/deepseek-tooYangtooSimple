@@ -9,7 +9,7 @@ const SWITCH_ITEMS = [
   { key: 'sw-issues', label: 'Taskstoissues', desc: '转换为 GitHub issues（外部副作用，默认关）', default: false }
 ]
 
-export default function CreateModal({ open, onClose, workspace, projects = [], models, onSubmit, loading }) {
+export default function CreateModal({ open, onClose, workspace, projects = [], models, onSubmit, onInitWorkspace, loading }) {
   const [feature, setFeature] = useState('')
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
@@ -114,7 +114,23 @@ export default function CreateModal({ open, onClose, workspace, projects = [], m
                 <div className="mono" style={{ border: '1px solid var(--line)', borderRadius: 6, background: 'var(--inset)', color: 'var(--text)', padding: '8px 10px', fontSize: 12 }}>
                   {workspace || '—'}
                 </div>
-                {hint && <div className="card-cap">{hint}</div>}
+                {hint && (
+                  <div className="card-cap" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>{hint}</span>
+                    {workspace && onInitWorkspace && (!entry || !entry.ready) && (
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ flex: 'none', height: 26, padding: '0 12px', fontSize: 12 }}
+                        title="拷贝插件内置 spec-kit 骨架生成 .specify/，并同步内置 skills 到 .dsh/speckit-workflow/skills/（无需外部 specify CLI）"
+                        disabled={loading}
+                        onClick={() => onInitWorkspace(workspace)}
+                      >
+                        ⚙ 初始化工作区
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="form-grid full">
                 <div className="field">

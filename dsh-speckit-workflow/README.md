@@ -28,7 +28,7 @@ Feature 工作流实例（一个 Feature 一条看板卡片）
 | 阶段线程详情 | 卡片 → 抽屉 | 9 阶段旅程、每个阶段的产物/skill 版本/输入快照/人工决策、当前线程消息流、待回答问题/待决策发现、按 §6 契约展示的操作 |
 | Clarify / Converge | 抽屉内聊天 / 线程弹窗 | 同线程逐题问答；`done`/`stop` 提前结束；Converge 先展示发现再决策（追加任务或无遗留） |
 | 人工交接 | 抽屉脚部动作 | 「确认进入 Clarify/Plan/…」「确认收敛并结束」等**带明确目标**的确认；重做（新 attempt）、跳过可选阶段、取消、返回上阶段 |
-| Host RPC | `/api/dsh-speckit-workflow` | `install` `workspaces` `check` `models` `instances` `instance-create` `instance-get` `instance-cancel` `stage-confirm` `stage-skip` `stage-answer` `stage-rerun` `stage-rollback` `stage-cancel` `thread-view` `artifact-read` `events-since` |
+| Host RPC | `/api/dsh-speckit-workflow` | `install` `workspaces` `check` `models` `instances` `workspace-init` `instance-create` `instance-get` `instance-cancel` `stage-confirm` `stage-skip` `stage-answer` `stage-rerun` `stage-rollback` `stage-cancel` `thread-view` `artifact-read` `events-since` |
 | 阶段线程 | `ctx.subagents` continuable subagent | 每个阶段一条 durable 线程；`agent/status` idle 边沿驱动账本推进；重启后由持久化账本恢复 |
 | 编排账本 | `~/.dsh/speckit-workflow/workflow.db` | `workflow_instances` / `stages` / `artifacts` / `decisions` / `events` / `actions` + `workspace_locks`；`node:sqlite` 内置实现（Node 22.5+/24），`node:sqlite` 缺失时降级 JSON 后端（仅开发用） |
 | Skills | 内置 `skills/` + 项目 `.dsh/speckit-workflow/skills/` | 10 个 vendored skill 在实例创建时按哈希同步；阶段线程 persona 注入 skill 内容 |
@@ -36,10 +36,13 @@ Feature 工作流实例（一个 Feature 一条看板卡片）
 ## Prerequisites
 
 1. DSH `web` profile（Node ≥ 22.5 优先使用内置 `node:sqlite`）。
-2. 一个带 **spec-kit `.specify` 骨架**的项目（templates + python 脚本）：
+2. **spec-kit `.specify` 骨架**（templates + python 脚本）——**无需手动准备**：
+   骨架已随插件内置（`skeleton/`，spec-kit v0.16.4，与内置 skills 同版本），
+   新建 Feature 弹窗对未就绪工作区点「⚙ 初始化工作区」即自动拷贝并同步内置
+   skills，**不依赖外部 `specify` CLI**。手动等价操作仍可用：
 
    ```bash
-   specify init --here --script py      # skills 随插件内置，无需 --skills
+   specify init --here --script py      # 可选；skills 随插件内置，无需 --skills
    ```
 
 3. **subagent 提供者**（可 spawn durable continuable 线程）已注册，例如
@@ -74,6 +77,7 @@ bash scripts/sync-to-profile.sh     # rsync 到 profile + 接线 dependencies/bu
 
 ```text
 instances        → 看板投影 { cwd, projects, columns, instances[] }
+workspace-init   → 一键初始化工作区：拷贝内置 spec-kit 骨架 + 内置 skills 同步 → { ready, issues, skeleton }
 instance-create  → 建实例 + 启动 Specify 线程 → { instanceId, stageId, threadId }
 instance-get     → 全部阶段/产物/决策/事件 + 当前线程消息 + 每个阶段允许的操作
 instance-cancel  → 删除整个 Feature 实例（取消活动阶段 + 释放工作区锁，idempotent by actionId）
@@ -129,5 +133,6 @@ bash scripts/sync-to-profile.sh  # 同步到 profile 后重启 DSH
 - Clarify/Converge 的“线程”是同一 continuable 会话，消息历史在其会话事件里；不是
   workflow engine run。
 - `constitution` 不在流程内（需要时单独运行 `speckit-constitution`）。
-- 项目需先用 `specify init --script py` 初始化 `.specify` 骨架。
+- `.specify` 骨架由插件内置（v0.16.4，与 vendored skills 同版本）在 workspace-init
+  时拷贝生成；已有项目的骨架不会被覆盖运行期产物（specs/、feature.json 不触碰）。
 - 数据库为 profile 级全局（跨工作区列出实例）；worktree 可被清理但账本不丢。
