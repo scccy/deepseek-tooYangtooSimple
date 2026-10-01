@@ -1,0 +1,45 @@
+{
+  "name": "dsh-enterworktree",
+  "version": "0.1.0",
+  "description": "DSH 版 enterworktree：创建（或复用）一个 git worktree，并自动开启一个指向该 worktree 路径的隔离 session，相当于 Claude Code 的 /enterworktree。",
+  "type": "module",
+  "main": "lib/index.js",
+  "icon": "./icon.svg",
+  "meta": {
+    "title": "Enter Worktree",
+    "description": "创建或复用 git worktree，并在该路径开一个隔离 session，等价于 Claude Code 的 /enterworktree。"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "icon.svg",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "smoke": "node --check lib/index.js"
+  },
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "worktree",
+    "enterworktree",
+    "git"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
