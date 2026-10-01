@@ -45,7 +45,7 @@ Feature 工作流实例（一个 Feature 一条看板卡片）
    新建 Feature 弹窗对未就绪工作区点「⚙ 初始化工作区」即自动执行官方
    `specify init --here --script py --integration codex --ignore-agent-tools`
    并同步内置 skills。**插件把 spec-kit 版本钉死在 `SPECIFY_CLI_VERSION`
-   （当前 v0.16.4，与内置 skills 同版本）**，不跟随本机 CLI 漂移：
+   （当前 **v1.0.13**，与内置 skills 逐字节同版本）**，不跟随本机 CLI 漂移：
 
    - 本机 `specify` 版本**精确匹配**时直接使用；
    - 否则用 `uvx --from specify-cli==<pinned>`（推荐，需装 [uv](https://docs.astral.sh/uv/)）
@@ -54,7 +54,7 @@ Feature 工作流实例（一个 Feature 一条看板卡片）
 
    ```bash
    # 手动等价操作（版本必须与 SPECIFY_CLI_VERSION 一致）
-   uvx --from specify-cli==0.16.4 specify init --here --script py \
+   uvx --from specify-cli==1.0.13 specify init --here --script py \
        --integration codex --ignore-agent-tools
    ```
 
@@ -103,7 +103,7 @@ bash scripts/sync-to-profile.sh
 
 改了 `web/src/` 一定要重新构建**并提交**产物；同一份 `web/src` 重复构建产出
 逐字节相同的 `board.js`（已实测 sha256 一致），所以 `git status` 就能看出产物
-是否已随源码更新。只改 `lib/`、`skills/`、`skeleton/` 时无需重新构建。
+是否已随源码更新。只改 `lib/`、`skills/`、`scripts/` 时无需重新构建。
 
 ## Workbench contract
 
@@ -167,6 +167,7 @@ bash scripts/sync-to-profile.sh  # 同步到 profile 后重启 DSH
 - Clarify/Converge 的“线程”是同一 continuable 会话，消息历史在其会话事件里；不是
   workflow engine run。
 - `constitution` 不在流程内（需要时单独运行 `speckit-constitution`）。
-- `.specify` 骨架由插件内置（v0.16.4，与 vendored skills 同版本）在 workspace-init
-  时拷贝生成；已有项目的骨架不会被覆盖运行期产物（specs/、feature.json 不触碰）。
+- `.specify` 由 workspace-init 执行**官方 `specify init`** 生成，spec-kit 版本钉死在
+  `SPECIFY_CLI_VERSION`（v1.0.13，与 vendored skills 同版本）；插件不再内置骨架副本。
+  重复初始化是幂等的，且不触碰 `specs/`、`.specify/feature.json` 等运行期产物。
 - 数据库为 profile 级全局（跨工作区列出实例）；worktree 可被清理但账本不丢。

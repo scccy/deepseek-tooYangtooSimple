@@ -396,7 +396,7 @@ export const api = {
     // mock：把目标工作区（若在种子列表里）翻转为就绪，模拟宿主跑完 specify init + skills 同步
     const entry = state.projects.find((p) => p.path === root)
     if (entry) { entry.ready = true; entry.issues = [] }
-    return { cwd: root, ready: true, issues: [], skeleton: 'spec-kit v0.16.4 (bundled)', output: '[mock] copied bundled skeleton -> .specify/' }
+    return { cwd: root, ready: true, issues: [], skeleton: 'spec-kit v1.0.13 (official init)', output: '[mock] specify init (pinned v1.0.13) -> .specify/' }
   },
 
   async constitution() {

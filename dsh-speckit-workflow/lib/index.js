@@ -32,7 +32,7 @@ export const RPC_CHANNEL = '/api/dsh-speckit-workflow'
 
 export const inject = ['tools', 'systemPrompt', 'agents', 'webServer', 'workspaceRegistry', 'subagents', 'llm']
 
-export const PLUGIN_VERSION = '0.9.0'
+export const PLUGIN_VERSION = '0.10.0'
 
 // 看板消息可投递进线程的阶段状态：活跃状态与「已暂停 / 已结束但仍是当前阶段」
 // 的终态。发送消息会把非 running 的行重新拉回 running，在同一个线程上继续，
@@ -59,16 +59,6 @@ const PROJECT_SKILL_DIR = '.dsh/speckit-workflow/skills'
 function bundledSkillDir() {
   try {
     return fileURLToPath(new URL('../skills/', import.meta.url))
-  } catch {
-    return null
-  }
-}
-
-// 内置 spec-kit 骨架（vendored，spec-kit v0.16.4）。v0.9 起工作区初始化改走官方
-// `specify init`，此处仅作为「重置为模板」时读取 constitution 模板的离线兜底。
-function bundledSkeletonDir() {
-  try {
-    return fileURLToPath(new URL('../skeleton/', import.meta.url))
   } catch {
     return null
   }
@@ -151,10 +141,12 @@ function resolveConstitutionWorkspace(payload, parentAgent) {
   return workspacePath
 }
 
-// 从 vendored 骨架里读取 constitution 模板，作为「重置为模板」的默认值。
-function constitutionTemplate() {
+// 「重置为模板」的默认值取自工作区自己的
+// .specify/templates/constitution-template.md（由官方 specify init 按钉死版本写入）。
+// 不再内置副本：vendored 骨架无法避免与所选 spec-kit 版本漂移。
+function constitutionTemplate(workspacePath) {
   try {
-    const path = join(bundledSkeletonDir(), 'templates', 'constitution-template.md')
+    const path = join(workspacePath, '.specify', 'templates', 'constitution-template.md')
     return readFileSync(path, 'utf8')
   } catch {
     return null
@@ -170,7 +162,7 @@ function constitutionTemplate() {
 //
 // 版本由插件钉死，不跟随用户本机 CLI 漂移（内置 skills 即该版本产物）：优先用版本
 // 精确匹配的本地 CLI，否则用 uvx / pipx 按精确版本临时拉取。
-const SPECIFY_CLI_VERSION = '0.16.4'
+const SPECIFY_CLI_VERSION = '1.0.13'
 const SPECIFY_CLI_PACKAGE = 'specify-cli'
 const SPECIFY_INIT_TIMEOUT_MS = 10 * 60 * 1000
 const execFileAsync = promisify(execFile)
@@ -497,7 +489,7 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
           throw new OrchestratorError('bad-request', `constitution 不可读: ${String((error && error.message) || error)}`)
         }
       }
-      return { ok: true, value: { path: '.specify/memory/constitution.md', workspacePath, exists, text, template: constitutionTemplate() } }
+      return { ok: true, value: { path: '.specify/memory/constitution.md', workspacePath, exists, text, template: constitutionTemplate(workspacePath) } }
     }
 
     case 'constitution-save': {

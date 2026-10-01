@@ -13,8 +13,8 @@ if [[ -h "$TARGET" ]]; then
   rm "$TARGET"
 fi
 mkdir -p "$TARGET"
-# 注意：排除模式必须锚定根目录（/scripts），否则会连带排除 skeleton/scripts
-# （内置 spec-kit 骨架的脚本），导致初始化出的 .specify 缺 python/bash 脚本。
+# 注意：排除模式必须锚定根目录（/scripts），否则任何层级的 scripts/ 都会被排除
+# （例如将来把脚本目录下移到子目录时），profile 副本会缺文件。
 rsync -a --delete \
   --exclude '/.git' \
   --exclude '/scripts' \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dsh-speckit-workflow v0.8 — fast local checks.
+# dsh-speckit-workflow v0.10 — fast local checks.
 # Parse all lib modules, verify the vendored skills, and run the pure-machine
 # smoke suite (SQLite ledger + orchestrator + stage graph + thread protocol).
 set -euo pipefail
@@ -28,17 +28,12 @@ echo '[ok] all lib modules parse'
 import { join } from 'node:path'
 const root = process.argv[2]
 const fs = await import('node:fs/promises')
-const SKILLS = ['speckit-specify', 'speckit-worktrees-create', 'speckit-clarify', 'speckit-plan', 'speckit-checklist', 'speckit-tasks', 'speckit-analyze', 'speckit-taskstoissues', 'speckit-implement', 'speckit-converge']
+const SKILLS = ['speckit-specify', 'speckit-worktrees-create', 'speckit-clarify', 'speckit-plan', 'speckit-checklist', 'speckit-tasks', 'speckit-analyze', 'speckit-taskstoissues', 'speckit-implement', 'speckit-converge', 'speckit-constitution']
 for (const skill of SKILLS) {
   const text = await fs.readFile(join(root, 'skills', skill, 'SKILL.md'), 'utf8')
   if (text.trim().length === 0) throw new Error(`vendored skill ${skill} is empty`)
 }
 console.log('[ok] vendored skills present:', SKILLS.length)
-for (const rel of ['skeleton/templates/spec-template.md', 'skeleton/scripts/python/check_prerequisites.py', 'skeleton/scripts/python/create_new_feature.py', 'skeleton/memory/constitution.md']) {
-  const text = await fs.readFile(join(root, rel), 'utf8')
-  if (text.trim().length === 0) throw new Error(`bundled skeleton file ${rel} is empty`)
-}
-console.log('[ok] bundled spec-kit skeleton present (skeleton/)')
 const stages = await import(join(root, 'lib/stages.js'))
 if (stages.STAGE_ORDER.length !== 9) throw new Error('stage graph must have 9 stages')
 if (stages.COLUMNS.length !== 4) throw new Error('board must have 4 columns')
@@ -47,4 +42,4 @@ NODE
 
 "$NODE" --no-warnings "$ROOT/scripts/machine-smoke.mjs"
 
-echo '[ok] dsh-speckit-workflow v0.8 checks passed'
+echo "[ok] dsh-speckit-workflow v0.10 checks passed"
