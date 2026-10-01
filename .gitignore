@@ -13,6 +13,11 @@ build/
 target/
 out/
 bundle-dist/
+# 例外：dsh-speckit-workflow 的工作台前端产物是运行时必需品 ——
+# lib/index.js 把它作为 /api/dsh-speckit-workflow/board.js 路由的内容提供，
+# 客户端 lib/client.js 强制 fetch 并挂载 window.__SPKB_BOARD__。
+# 该包只经 git 分发（未发布 npm，无 prepublish 钩子），所以必须入库。
+!dsh-speckit-workflow/web/bundle-dist/
 .next/
 .turbo/
 coverage/

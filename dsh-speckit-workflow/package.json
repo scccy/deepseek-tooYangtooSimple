@@ -48,7 +48,8 @@
     "check": "bash scripts/check.sh",
     "smoke": "node scripts/smoke.mjs",
     "test": "node --test lib/*.test.mjs",
-    "sync": "bash scripts/sync-to-profile.sh"
+    "sync": "bash scripts/sync-to-profile.sh",
+    "build:bundle": "npm --prefix web run build:bundle"
   },
   "license": "MIT",
   "keywords": [

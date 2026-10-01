@@ -71,6 +71,24 @@ bash scripts/sync-to-profile.sh     # rsync 到 profile + 接线 dependencies/bu
 > `pnpm-workspace.yaml` 的 `allowBuilds` 占位串 `set this to true or false` 改成
 > 显式布尔值后重跑。
 
+### 构建前端产物（改过 `web/src/` 就必须做）
+
+工作台 React 界面被打包成单文件 `web/bundle-dist/board.js`，由宿主作为
+`/api/dsh-speckit-workflow/board.js` 提供，客户端 `lib/client.js` 强制 fetch 它
+并挂载 `window.__SPKB_BOARD__`。**该产物已入库**：本包只经 git 分发（未发布
+npm，没有 `prepublish` 钩子），不入库则别人 clone 后点「看板」只会看到
+`工作台 bundle 未暴露 __SPKB_BOARD__.mount`。
+
+```bash
+npm --prefix web install    # 首次：安装前端依赖
+npm run build:bundle        # = cd web && vite build --config vite.bundle.config.js
+bash scripts/sync-to-profile.sh
+```
+
+改了 `web/src/` 一定要重新构建**并提交**产物；同一份 `web/src` 重复构建产出
+逐字节相同的 `board.js`（已实测 sha256 一致），所以 `git status` 就能看出产物
+是否已随源码更新。只改 `lib/`、`skills/`、`skeleton/` 时无需重新构建。
+
 ## Workbench contract
 
 所有变更都走宿主 RPC；每个用户变更都带 `actionId` 幂等键（不依赖前端按钮禁用）：
