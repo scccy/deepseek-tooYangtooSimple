@@ -118,6 +118,7 @@ pub enum Text {
     QuitDialogTitle,
     QuitConfirm,
     QuitCancel,
+    QuitFallbackBody,
     RecoveryTitle,
     RecoveryExit,
     RecoveryRestart,
@@ -136,6 +137,10 @@ pub fn text(key: Text) -> &'static str {
         Text::QuitDialogTitle => pick("退出 DSH Desktop？", "Quit DSH Desktop?"),
         Text::QuitConfirm => pick("退出", "Quit"),
         Text::QuitCancel => pick("取消", "Cancel"),
+        Text::QuitFallbackBody => pick(
+            "无法确认当前是否有任务在运行（状态检查不可用）。现在退出可能中断正在执行的任务。",
+            "Running tasks could not be checked (the status probe is unavailable). Quitting now may interrupt them.",
+        ),
         Text::RecoveryTitle => pick("DSH Desktop 无法启动", "DSH Desktop Failed to Start"),
         Text::RecoveryExit => pick("退出", "Exit"),
         Text::RecoveryRestart => pick("重启", "Restart"),

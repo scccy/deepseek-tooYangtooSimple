@@ -37,7 +37,7 @@ fn default_binding(command: &str) -> &'static str {
         "toggleDevtools" => "F12",
         "minimize" => "CmdOrCtrl+M",
         "closePage" => "CmdOrCtrl+W",
-        "quit" => "CmdOrCtrl+Q",
+        "quit" => "CmdOrCtrl+Shift+Q",
         _ => "",
     }
 }
@@ -245,6 +245,6 @@ mod tests {
         assert_eq!(out.get("reloadPage").unwrap(), "CmdOrCtrl+Shift+R");
         assert!(out.get("hack").is_none());
         // untouched commands keep their defaults
-        assert_eq!(out.get("quit").unwrap(), "CmdOrCtrl+Q");
+        assert_eq!(out.get("quit").unwrap(), "CmdOrCtrl+Shift+Q");
     }
 }

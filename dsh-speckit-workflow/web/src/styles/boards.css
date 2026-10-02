@@ -472,7 +472,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .spkb-ctx button:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
 .spkb-ctx svg { width: 14px; height: 14px; color: var(--teal); }
 
-/* ---- Constitution 管理页 ---- */
+/* ---- Constitution 管理页（视觉语言与「新建 Feature」弹窗对齐：card / card-head / card-cap / field / btn）---- */
 .constitution-page {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   gap: 14px; padding: 18px 22px; overflow: hidden;
@@ -483,10 +483,17 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .constitution-sub { margin-top: 6px; color: var(--muted); font-size: 12.5px; }
 .constitution-sub .mono { color: #8fb6c4; }
 .constitution-dirty { color: #e0b86a; }
-.constitution-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+/* 卡片化：与「新建 Feature」弹窗一致 */
+.constitution-card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.constitution-card .card-body { flex: 1; min-height: 0; display: flex; padding: 13px 14px; }
 .constitution-loading { flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
 .constitution-editor {
-  flex: 1; min-height: 0; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 13px; line-height: 1.6; resize: none;
+  flex: 1; min-height: 0; width: 100%;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--inset);
+  color: var(--text); padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.6; resize: none; tab-size: 2;
 }
-.constitution-editor textarea { height: 100% !important; tab-size: 2; }
+.constitution-editor:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 2px rgba(73, 199, 181, 0.18); }
+.constitution-editor::placeholder { color: var(--subtle); }
+.constitution-foot { display: flex; gap: 8px; padding: 13px 14px; border-top: 1px solid var(--line-soft); }

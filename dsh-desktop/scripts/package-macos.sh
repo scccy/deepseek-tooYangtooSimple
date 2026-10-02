@@ -26,7 +26,7 @@ else
 fi
 
 PRODUCT_NAME="DSH Desktop"
-VERSION="${VERSION:-0.7.5}"
+VERSION="${VERSION:-0.7.6}"
 IDENTIFIER="com.deepseek.harness.desktop"
 BUNDLE_ROOT="src-tauri/target/release/bundle/macos"
 APP_DIR="${BUNDLE_ROOT}/${PRODUCT_NAME}.app"

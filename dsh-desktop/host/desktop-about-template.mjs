@@ -63,6 +63,34 @@ export function renderAboutClient(versionJson) {
         opacity: busy ? 0.55 : 1
       });
     }
+    var subRowStyle = {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      width: "100%", minHeight: "30px", gap: "8px"
+    };
+    var subTextStyle = {
+      display: "flex", flexDirection: "column", minWidth: 0, paddingRight: "16px"
+    };
+    var subLabelStyle = {
+      color: "var(--dsw-alias-label-primary)", fontSize: "13px", lineHeight: "20px"
+    };
+    var subHintStyle = {
+      color: "var(--dsw-alias-label-secondary)", fontSize: "12px", lineHeight: "18px"
+    };
+    function toggleStyle(on, muted) {
+      return {
+        flexShrink: 0,
+        minWidth: "44px",
+        padding: "2px 10px",
+        borderRadius: "999px",
+        border: "1px solid " + (on ? "var(--dsw-alias-accent, #4f7cff)" : "var(--dsw-alias-border-l2)"),
+        background: on ? "var(--dsw-alias-accent, #4f7cff)" : "transparent",
+        color: on ? "#f4f6ff" : "var(--dsw-alias-label-secondary)",
+        fontSize: "12px",
+        lineHeight: "18px",
+        cursor: muted ? "default" : "pointer",
+        opacity: muted ? 0.45 : 1
+      };
+    }
     function invokeNative(cmd, args) {
       var api = window.__TAURI__;
       if (api === undefined || api.core === undefined || typeof api.core.invoke !== "function") {
@@ -446,34 +474,6 @@ export function renderAboutClient(versionJson) {
         ["error", "会话错误", "会话运行出错时"],
         ["plugin", "插件批准", "动态插件请求批准时"]
       ];
-      function toggleStyle(on, muted) {
-        return {
-          flexShrink: 0,
-          minWidth: "44px",
-          padding: "2px 10px",
-          borderRadius: "999px",
-          border: "1px solid " + (on ? "var(--dsw-alias-accent, #4f7cff)" : "var(--dsw-alias-border-l2)"),
-          background: on ? "var(--dsw-alias-accent, #4f7cff)" : "transparent",
-          color: on ? "#f4f6ff" : "var(--dsw-alias-label-secondary)",
-          fontSize: "12px",
-          lineHeight: "18px",
-          cursor: muted ? "default" : "pointer",
-          opacity: muted ? 0.45 : 1
-        };
-      }
-      var subRowStyle = {
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        width: "100%", minHeight: "30px", gap: "8px"
-      };
-      var subTextStyle = {
-        display: "flex", flexDirection: "column", minWidth: 0, paddingRight: "16px"
-      };
-      var subLabelStyle = {
-        color: "var(--dsw-alias-label-primary)", fontSize: "13px", lineHeight: "20px"
-      };
-      var subHintStyle = {
-        color: "var(--dsw-alias-label-secondary)", fontSize: "12px", lineHeight: "18px"
-      };
       var ready = !(prefs === null || prefs === undefined);
       var globalOn = ready && prefs.enabled === true;
       return react.createElement("div", { style: Object.assign({}, rowStyle, { alignItems: "flex-start", flexDirection: "column" }) },
@@ -509,6 +509,57 @@ export function renderAboutClient(versionJson) {
         })
       );
     }
+    function CloseBehaviorRow() {
+      var state = react.useState(null);
+      var behavior = state[0];
+      var setBehavior = state[1];
+      var savingState = react.useState(false);
+      var saving = savingState[0];
+      var setSaving = savingState[1];
+      function load() {
+        invokeNative("shell_get_close_behavior").then(function (raw) {
+          try {
+            setBehavior((typeof raw === "string" ? JSON.parse(raw) : raw).behavior || "hide");
+          } catch (e) {
+            setBehavior(null);
+          }
+        }, function () { setBehavior(null); });
+      }
+      react.useEffect(function () { load(); }, []);
+      function onPick(value) {
+        if (behavior === null || behavior === undefined || saving) return;
+        setSaving(true);
+        setBehavior(value);
+        invokeNative("shell_set_close_behavior", { behavior: value }).then(function () {
+          setSaving(false);
+        }, function () {
+          setSaving(false);
+          load();
+        });
+      }
+      var selectStyle = Object.assign({}, buttonBaseStyle, {
+        cursor: saving ? "progress" : "pointer",
+        opacity: behavior === null || behavior === undefined ? 0.55 : 1,
+        marginLeft: "16px",
+        padding: "5px 10px"
+      });
+      var ready = !(behavior === null || behavior === undefined);
+      return react.createElement("div", { style: rowStyle },
+        react.createElement("div", { style: textWrapStyle },
+          react.createElement("div", { style: titleStyle }, "关闭按钮 / Close button"),
+          react.createElement("div", { style: hintStyle }, "点击右上角 X 的行为；选退出时若有任务运行会先确认")
+        ),
+        react.createElement("select", {
+          style: selectStyle,
+          value: behavior === null || behavior === undefined ? "" : behavior,
+          disabled: !ready,
+          onChange: function (event) { onPick(event.target.value); }
+        },
+          react.createElement("option", { value: "hide" }, "进入后台"),
+          react.createElement("option", { value: "exit" }, "直接退出程序")
+        )
+      );
+    }
     function apply(ctx) {
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
@@ -535,6 +586,11 @@ export function renderAboutClient(versionJson) {
         id: "desktop-notifications",
         order: 930
       }, NotificationsRow));
+      ctx.slots.inject("settings.general.item", () => ctx.slots.register({
+        name: "settings.general.item",
+        id: "desktop-close-behavior",
+        order: 935
+      }, CloseBehaviorRow));
       ctx.slots.inject("settings.general.item", () => ctx.slots.register({
         name: "settings.general.item",
         id: "desktop-repair",

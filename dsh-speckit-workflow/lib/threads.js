@@ -252,6 +252,20 @@ export class StageThreads {
     const skillSha256 = createHash('sha256').update(skillSource).digest('hex')
     this.providerDescriptor()
 
+    // 解析 host 当前模型路由，显式传给子线程的 agentOptions（只传 provider+model，
+    // 不带 reasoningEffort）。否则子线程会继承父会话的 reasoningEffort（如 'high'），
+    // 而部分模型（例如 workbuddy/hy3）并不支持该 effort，会首轮即报错
+    // UNSUPPORTED_REASONING_EFFORT 导致线程无收尾消息。阶段线程 spawnStage 已采用同样的
+    // provider+model-only 写法规避此问题。
+    let agentOptions = undefined
+    try {
+      const adm = this.ctx.get('agentDefaultModel')
+      const selection = adm && typeof adm.currentSelection === 'function' ? adm.currentSelection() : null
+      if (selection && selection.provider && selection.model) {
+        agentOptions = { provider: String(selection.provider), model: String(selection.model) }
+      }
+    } catch { /* best effort: 不显式指定则回落到 provider 默认 */ }
+
     const persona = [
       `You are a skill execution thread inside DeepSeek Harness, running the Spec Kit skill "${skillId}".`,
       `Workspace: ${workspacePath} — ALL of your file work happens inside this directory.`,
@@ -269,7 +283,7 @@ export class StageThreads {
       parent: parentAgent,
       persona,
       toolFilter: { deny: [TOOL_NAME_DENY] },
-      agentOptions: undefined
+      agentOptions
     }
     const start = await this.subagents.startContinuable({ provider: this.provider, label: `speckit-adhoc:${skillId}`, request, signal: this._signal })
     return start.childId
@@ -359,6 +373,21 @@ export class StageThreads {
     // resume delivers a followup and it keeps working. Never fail a held
     // (interrupted) thread just because state.json is absent.
     if (!state && stageRow.status === 'paused') return { ok: true, status: 'paused' }
+    // 线程仍存活却没有 state.json：写协议文件与 idle 事件之间存在竞态
+    // （线程先 emit idle，state.json 尚未落盘）。此时绝不可判失败，保留 running，
+    // 等下一次 idle（文件已写好）再真正吸收状态。只有线程确实已死且仍无 state，
+    // 才交给 processThreadTurn 判失败（那是真实的"无协议输出"）。
+    if (!state) {
+      const live = stageRow.thread_id ? this.ctx.agents.get(stageRow.thread_id) : undefined
+      const alive = !!live && live.status !== 'stopped' && live.status !== 'dead' && live.status !== 'failed'
+      if (alive) {
+        // 状态协议文件尚未落盘（线程仍活着）：绝不在竞态窗口误判失败。
+        // 直接保留当前状态、等待下一次 idle 事件再真正吸收 —— 线程写完回合后会
+        // 再次 emit idle，届时 state.json 已就绪。若线程已真正结束却未落盘（被中断），
+        // 则走下方 processThreadTurn 判失败（那才是真实的"无协议输出"）。
+        return { ok: true, status: stageRow.status, pending: true, reason: 'thread alive, state.json not yet written' }
+      }
+    }
     const executionRoot = instance.execution_root || instance.workspace_path
     const rels = state && Array.isArray(state.artifacts) ? state.artifacts.map((entry) => (typeof entry === 'string' ? entry : entry && entry.rel)).filter(Boolean) : []
     const artifacts = await collectArtifacts(executionRoot, rels)

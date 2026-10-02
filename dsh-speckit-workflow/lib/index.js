@@ -481,7 +481,7 @@ async function rpcHandler(ctx, bodies, ledger, orchestrator, threads, sessionId)
     // 读取/写入 .specify/memory/constitution.md（initWorkspace 已生成）。
     case 'constitution': {
       const workspacePath = resolveConstitutionWorkspace(payload, parentAgent)
-      const file = join(workspacePath, 'constitution.md'.replace('constitution.md', '.specify/memory/constitution.md'))
+      const file = join(workspacePath, CONSTITUTION_REL)
       const exists = existsSync(file)
       let text = ''
       if (exists) {

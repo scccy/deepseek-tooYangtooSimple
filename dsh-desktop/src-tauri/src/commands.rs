@@ -38,6 +38,7 @@ pub fn focus_main_window(app: &AppHandle) {
 }
 
 pub fn finish_quit(app: &AppHandle) {
+    eprintln!("[dsh-desktop] quitting now");
     let state = app.state::<crate::AppState>();
     state.quitting.store(true, Ordering::SeqCst);
     app.exit(0);
@@ -48,7 +49,8 @@ pub fn finish_quit(app: &AppHandle) {
 /// semantics).
 static QUIT_INFLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn request_quit(app: &AppHandle) {
+pub fn request_quit(app: &AppHandle, source: &str) {
+    eprintln!("[dsh-desktop] quit requested (source: {source})");
     if QUIT_INFLIGHT.compare_exchange(
         false,
         true,
@@ -57,6 +59,7 @@ pub fn request_quit(app: &AppHandle) {
     )
     .is_err()
     {
+        eprintln!("[dsh-desktop] quit already in flight; joining existing request");
         return; // a quit decision is already in progress; join it by doing nothing
     }
     // The inspection wait (2s deadline) and the dialog both block; keep them
@@ -79,6 +82,7 @@ fn quit_with_inspection(app: AppHandle) {
         return;
     }
     let mut pending: Option<(bool, bool, u64, u64)> = None;
+    let mut inspection_ready = false;
     if !state.restarting.load(Ordering::SeqCst) {
         let bridge = state.bridge.clone();
         if let Ok((_id, rx)) = bridge.request(json!({ "type": "quit-inspection" })) {
@@ -90,6 +94,7 @@ fn quit_with_inspection(app: AppHandle) {
                 ..
             }) = Bridge::recv_event_timeout(&rx, Duration::from_secs(2))
             {
+                inspection_ready = ready;
                 if ready && (running_tasks || scheduled_reminders) {
                     let agents = details
                         .get("agents")
@@ -102,9 +107,25 @@ fn quit_with_inspection(app: AppHandle) {
         }
     }
     let Some((running, scheduled, agents, jobs)) = pending else {
-        finish_quit(&app);
+        if inspection_ready {
+            eprintln!("[dsh-desktop] quit inspection: nothing running or scheduled; exiting directly");
+            finish_quit(&app);
+            return;
+        }
+        // The probe failed (host not ready, restart in flight, timeout): never
+        // exit blind — a fallback dialog stands in for the inspection result.
+        eprintln!("[dsh-desktop] quit inspection unavailable (ready={inspection_ready}) → confirmation dialog");
+        if quit_confirm_unchecked() {
+            eprintln!("[dsh-desktop] quit dialog: confirmed (inspection unavailable)");
+            finish_quit(&app);
+        } else {
+            eprintln!("[dsh-desktop] quit dialog: cancelled (inspection unavailable)");
+        }
         return;
     };
+    eprintln!(
+        "[dsh-desktop] quit inspection: running_tasks={running} scheduled={scheduled} agents={agents} jobs={jobs} → confirmation dialog"
+    );
 
     use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
     let body = crate::i18n::quit_dialog_body(running, scheduled, agents, jobs);
@@ -118,10 +139,29 @@ fn quit_with_inspection(app: AppHandle) {
         ))
         .show();
     if matches!(confirmed, MessageDialogResult::Yes | MessageDialogResult::Ok) {
+        eprintln!("[dsh-desktop] quit dialog: confirmed (tasks would be interrupted)");
         finish_quit(&app);
+    } else {
+        eprintln!("[dsh-desktop] quit dialog: cancelled (tasks kept running)");
     }
     // Cancel / dismiss: leave everything running; the next quit request
     // re-inspects.
+}
+
+/// Bare-bones confirmation for quits when the running-task probe is
+/// unavailable. rfd blocks until answered; only call off the event thread.
+fn quit_confirm_unchecked() -> bool {
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    let result = MessageDialog::new()
+        .set_title(crate::i18n::text(crate::i18n::Text::QuitDialogTitle))
+        .set_description(crate::i18n::text(crate::i18n::Text::QuitFallbackBody))
+        .set_level(MessageLevel::Warning)
+        .set_buttons(MessageButtons::OkCancelCustom(
+            crate::i18n::text(crate::i18n::Text::QuitConfirm).to_string(),
+            crate::i18n::text(crate::i18n::Text::QuitCancel).to_string(),
+        ))
+        .show();
+    matches!(result, MessageDialogResult::Yes | MessageDialogResult::Ok)
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +701,79 @@ pub fn shell_set_notify_prefs(app: AppHandle, prefs: String) -> Result<(), Strin
 }
 
 // ---------------------------------------------------------------------------
+// window close behavior
+// ---------------------------------------------------------------------------
+const CLOSE_BEHAVIOR_FILENAME: &str = "close-behavior.json";
+
+/// What the window close button (X) does. `Hide` keeps the shell resident in
+/// the tray (default); `Exit` routes the click through the confirming quit
+/// flow, so a task-running shell still asks before dying.
+pub enum CloseBehavior {
+    Hide,
+    Exit,
+}
+
+fn close_behavior_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(CLOSE_BEHAVIOR_FILENAME))
+}
+
+/// Read the persisted close behavior, defaulting to Hide on any absent or
+/// malformed file. Called from the window-close event handler.
+pub fn current_close_behavior(app: &AppHandle) -> CloseBehavior {
+    let behavior = close_behavior_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .and_then(|value| {
+            value
+                .get("behavior")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    match behavior.as_deref() {
+        Some("exit") => CloseBehavior::Exit,
+        _ => CloseBehavior::Hide,
+    }
+}
+
+/// Clamp to the two known values so a stale or hand-edited file stays safe.
+fn normalize_close_behavior(input: Option<&Value>) -> Value {
+    let behavior = input
+        .and_then(|value| value.get("behavior"))
+        .and_then(Value::as_str)
+        .unwrap_or("hide");
+    json!({ "behavior": if behavior == "exit" { "exit" } else { "hide" } })
+}
+
+/// Read the persisted close-button behavior for the settings panel.
+#[tauri::command]
+pub fn shell_get_close_behavior(app: AppHandle) -> Result<String, String> {
+    let path = close_behavior_path(&app).ok_or_else(|| "app data dir unavailable".to_string())?;
+    let value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok());
+    Ok(normalize_close_behavior(value.as_ref()).to_string())
+}
+
+/// Persist the close-button behavior; applies to the next window-close event.
+#[tauri::command]
+pub fn shell_set_close_behavior(app: AppHandle, behavior: String) -> Result<(), String> {
+    let normalized = normalize_close_behavior(Some(&json!({ "behavior": behavior })));
+    let path = close_behavior_path(&app).ok_or_else(|| "app data dir unavailable".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, normalized.to_string()).map_err(|e| e.to_string())?;
+    eprintln!(
+        "[dsh-desktop] close behavior set to {}",
+        normalized["behavior"].as_str().unwrap_or("hide")
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // keyboard shortcuts (batch 4)
 // ---------------------------------------------------------------------------
 #[tauri::command]
@@ -682,7 +795,7 @@ pub fn shell_dispatch_shortcut(app: AppHandle, command: String) -> Result<(), St
         // close-to-tray semantics: the shell never closes the page
         "closePage" => window.hide().map_err(|e| e.to_string()),
         "quit" => {
-            request_quit(&app);
+            request_quit(&app, "shortcut");
             Ok(())
         }
         other => Err(format!("unknown shortcut command: {other}")),

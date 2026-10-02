@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { callHost, requestExitBoard, threadTail } from './api/index.js'
+import { callHost, requestExitBoard, threadTail, fetchThreadHistory } from './api/index.js'
 import { CONFIRM_NEXT, EXEC_MODES, nextStageWithConfig, phaseLabel, previousPhaseStart } from './lib/constants.js'
 import TopBar from './components/TopBar.jsx'
 import Board from './components/Board.jsx'

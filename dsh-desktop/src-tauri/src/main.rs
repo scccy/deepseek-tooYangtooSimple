@@ -136,8 +136,8 @@ fn focus_main_window(app: &tauri::AppHandle) {
     commands::focus_main_window(app);
 }
 
-fn request_quit(app: &tauri::AppHandle) {
-    commands::request_quit(app);
+fn request_quit(app: &tauri::AppHandle, source: &str) {
+    commands::request_quit(app, source);
 }
 
 /// Handle `window.open` / target=_blank from WKWebView.
@@ -212,7 +212,7 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
     let hide_others = PredefinedMenuItem::hide_others(app, None)?;
     let show_all = PredefinedMenuItem::show_all(app, None)?;
     let quit = MenuItemBuilder::with_id("menu-quit", i18n::text(i18n::Text::MenuQuit))
-        .accelerator("CmdOrCtrl+Q")
+        .accelerator("CmdOrCtrl+Shift+Q")
         .build(app)?;
     let app_menu = SubmenuBuilder::new(app, "DSH Desktop")
         .item(&about)
@@ -285,7 +285,7 @@ fn setup_native_shell(app: &tauri::App) -> tauri::Result<()> {
         .icon_as_template(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray-show" => focus_main_window(app),
-            "tray-quit" => request_quit(app),
+            "tray-quit" => request_quit(app, "tray"),
             _ => {}
         })
         .on_tray_icon_event(|_tray, event| {
@@ -820,6 +820,8 @@ fn main() {
             commands::shell_diagnostics,
             commands::shell_get_notify_prefs,
             commands::shell_set_notify_prefs,
+            commands::shell_get_close_behavior,
+            commands::shell_set_close_behavior,
             commands::shell_dispatch_shortcut,
             commands::shell_get_keybindings,
             commands::shell_set_keybindings,
@@ -1006,9 +1008,20 @@ fn main() {
             let hidden_target = window.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
-                    if !quitting_flag.load(Ordering::SeqCst) {
-                        api.prevent_close();
-                        let _ = hidden_target.hide();
+                    if quitting_flag.load(Ordering::SeqCst) {
+                        return; // a confirmed quit is in progress; let it close
+                    }
+                    api.prevent_close();
+                    let app_handle = hidden_target.app_handle().clone();
+                    match commands::current_close_behavior(&app_handle) {
+                        commands::CloseBehavior::Hide => {
+                            let _ = hidden_target.hide();
+                        }
+                        commands::CloseBehavior::Exit => {
+                            // Still runs the confirming quit flow, so a busy
+                            // shell asks before dying.
+                            request_quit(&app_handle, "close-button");
+                        }
                     }
                 }
             });
@@ -1021,7 +1034,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => focus_main_window(app_handle),
             RunEvent::MenuEvent(event) => match event.id().as_ref() {
-                "menu-quit" => request_quit(app_handle),
+                "menu-quit" => request_quit(app_handle, "menu"),
                 "menu-reload" => {
                     if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW) {
                         let _ = window.eval("window.location.reload()");

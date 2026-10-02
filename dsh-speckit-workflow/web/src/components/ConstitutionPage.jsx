@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Input, Button, Spin } from 'antd'
+import { Spin } from 'antd'
 import { Icon } from '../lib/icons.jsx'
 import { callHost } from '../api/index.js'
 
 // 专属 Constitution 管理页（不进流水线）：
 //   - 读取/编辑/保存 .specify/memory/constitution.md（宿主专用 endpoint，只认这一个文件）
 //   - 调内置 speckit-constitution skill 重新生成（独立 continuable 线程，ThreadModal 续对话）
+// 视觉语言与「新建 Feature」弹窗对齐：card / card-head / card-cap / field / btn。
 export default function ConstitutionPage({ workspace, onOpenThread, onToast }) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -56,7 +57,7 @@ export default function ConstitutionPage({ workspace, onOpenThread, onToast }) {
     try {
       const value = await callHost('constitution-regen', { workspacePath: workspace, args: '' })
       onToast && onToast('已派生 speckit-constitution 线程，可在对话窗口继续')
-      if (value && value.threadId && onOpenThread) onOpenThread(null, 'constitution', value.threadId)
+      if (value && value.threadId && onOpenThread) onOpenThread(value.threadId)
     } catch (error) {
       onToast && onToast(String((error && error.message) || error))
     } finally {
@@ -90,30 +91,40 @@ export default function ConstitutionPage({ workspace, onOpenThread, onToast }) {
             {dirty && <span className="constitution-dirty"> · 未保存</span>}
           </div>
         </div>
-        <div className="constitution-actions">
-          <Button onClick={resetTemplate} disabled={loading || saving}>
-            <Icon name="reset" /> 重置为模板
-          </Button>
-          <Button onClick={regen} loading={regening} disabled={loading || saving}>
-            <Icon name="spark" /> 用 speckit-constitution 重新生成
-          </Button>
-          <Button type="primary" onClick={save} loading={saving} disabled={loading || !dirty}>
-            <Icon name="check" /> 保存
-          </Button>
-        </div>
       </div>
 
-      {loading ? (
-        <div className="constitution-loading"><Spin /><span>读取中…</span></div>
-      ) : (
-        <Input.TextArea
-          className="constitution-editor"
-          value={text}
-          onChange={(e) => { setText(e.target.value); setDirty(true) }}
-          autoSize={{ minRows: 24, maxRows: 40 }}
-          placeholder="# [PROJECT_NAME] Constitution&#10;&#10;## Core Principles&#10;..."
-        />
-      )}
+      <section className="card constitution-card">
+        <div className="card-head">
+          <div>
+            <div className="card-title"><Icon name="text" />编辑器</div>
+            <div className="card-cap">直接编辑并保存 Markdown；或交给内置 speckit-constitution 线程重新生成（可在弹出的对话窗口继续指导）。</div>
+          </div>
+        </div>
+        <div className="card-body">
+          {loading ? (
+            <div className="constitution-loading"><Spin /><span>读取中…</span></div>
+          ) : (
+            <textarea
+              className="constitution-editor"
+              value={text}
+              spellCheck={false}
+              onChange={(e) => { setText(e.target.value); setDirty(true) }}
+              placeholder="# [PROJECT_NAME] Constitution&#10;&#10;## Core Principles&#10;..."
+            />
+          )}
+        </div>
+        <div className="constitution-foot">
+          <button className="btn" onClick={resetTemplate} disabled={loading || saving || regening}>
+            <Icon name="refresh" /> 重置为模板
+          </button>
+          <button className="btn" onClick={regen} disabled={loading || saving || regening}>
+            <Icon name="bulb" /> {regening ? '生成中…' : '用 speckit-constitution 重新生成'}
+          </button>
+          <button className="btn btn-primary" onClick={save} disabled={loading || saving || !dirty}>
+            <Icon name="check" /> {saving ? '保存中…' : '保存'}
+          </button>
+        </div>
+      </section>
     </div>
   )
 }

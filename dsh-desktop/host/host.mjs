@@ -71,7 +71,7 @@ const WWW_DIR = dshenv('DSH_DESKTOP_WWW_DIR', 'DSH_MAC_WWW_DIR') ?? join(resolve
 // without an app version bump.
 const ABOUT_PACKAGE = '@dsh-desktop/desktop-about';
 const ABOUT_VERSION = (dshenv('DSH_DESKTOP_APP_VERSION', 'DSH_MAC_APP_VERSION') ?? '0.0.0').trim() || '0.0.0';
-const ABOUT_BUNDLE_REVISION = 14;
+const ABOUT_BUNDLE_REVISION = 16;
 
 /** Write/refresh the desktop settings client bundle under the profile. */
 function ensureDesktopAboutBundle(profileDir) {
